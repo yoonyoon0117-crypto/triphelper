@@ -49,6 +49,8 @@ npm run icons      # 홈 화면 아이콘 PNG 재생성 (public/icon-source.svg)
 
 ## 배포 (Railway 예시)
 
+> 저장소: <https://github.com/yoonyoon0117-crypto/triphelper> (`main`)
+
 1. 이 폴더를 GitHub 저장소에 올리고 Railway에서 **Deploy from GitHub**.
 2. **Volume**을 만들어 `/data`에 마운트.
 3. 환경변수: `DATA_DIR=/data`, (필요하면) `PORT`는 Railway가 자동 주입.
