@@ -1,0 +1,396 @@
+#!/usr/bin/env node
+/**
+ * Trip helper✈️ UI E2E 테스트 (Playwright, 아이폰 390×844)
+ *
+ *   1) 정산 탭 · 지출 추가 → 정산 금액 확인
+ *   2) 인원 변경 시 재계산
+ *   3) 가족 호칭 변경이 정산·지출·지출 모달에 즉시 반영
+ *   4) 일정 추가 · 구글지도 링크 · 일정에서 지출 기록
+ *   5) 친구 5명 새 여행 만들기 · 전환 · 5명/3명 정산(최소 송금)
+ *   6) 두 기기 동시 사용(폴링 동기화)
+ *   7) 콘솔 오류 0건
+ *
+ *   npm run test:ui
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+import assert from 'node:assert/strict';
+
+const require = createRequire(import.meta.url);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const ROOT = path.resolve(__dirname, '..');
+const WORKSPACE = path.resolve(ROOT, '..');
+const SHOT_DIR = process.env.SHOT_DIR ? path.resolve(process.env.SHOT_DIR) : path.join(WORKSPACE, 'downloads', 'family-trip-screens', 'steps');
+
+const BROWSERS = path.join(WORKSPACE, '.tools', 'pw-browsers');
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(BROWSERS)) process.env.PLAYWRIGHT_BROWSERS_PATH = BROWSERS;
+const LIBS = path.join(WORKSPACE, '.tools', 'libs');
+if (fs.existsSync(LIBS)) process.env.LD_LIBRARY_PATH = [LIBS, process.env.LD_LIBRARY_PATH].filter(Boolean).join(':');
+const { chromium } = require('playwright');
+
+fs.mkdirSync(SHOT_DIR, { recursive: true });
+
+const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trip-ui-'));
+const DATA_DIR = path.join(tmpRoot, 'data');
+let server;
+let browser;
+let base;
+
+const errors = [];
+const steps = [];
+function step(name) {
+  steps.push(name);
+  console.log(`\n▶ ${name}`);
+}
+
+async function waitForServer(url, tries = 60) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(`${url}/api/health`);
+      if (r.ok) return;
+    } catch { /* 대기 */ }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  throw new Error('서버가 뜨지 않았습니다.');
+}
+
+async function shot(page, name) {
+  const file = path.join(SHOT_DIR, name);
+  await page.screenshot({ path: file });
+  console.log(`   📸 ${name}`);
+  return file;
+}
+
+const api = async (p, opts) => {
+  const r = await fetch(base + p, opts);
+  return { status: r.status, data: await r.json().catch(() => null) };
+};
+
+async function run() {
+  // ── 서버 ──────────────────────────────────────
+  const port = 3200 + Math.floor(Math.random() * 400);
+  base = `http://127.0.0.1:${port}`;
+  server = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+    env: { ...process.env, PORT: String(port), DATA_DIR, NODE_ENV: 'test' },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  server.stdout.on('data', () => {});
+  server.stderr.on('data', (d) => process.stderr.write(`[server] ${d}`));
+  await waitForServer(base);
+
+  browser = await chromium.launch();
+  const ctx = await browser.newContext({
+    viewport: { width: 390, height: 844 },
+    deviceScaleFactor: 2,
+    isMobile: true,
+    hasTouch: true,
+    locale: 'ko-KR',
+    timezoneId: 'Asia/Seoul',
+    userAgent: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Mobile/15E148 Safari/604.1',
+  });
+  const page = await ctx.newPage();
+  page.setDefaultTimeout(15000);
+  page.on('console', (m) => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
+  page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
+
+  // ── 1. 첫 화면 · 정산 ─────────────────────────
+  step('1. 첫 화면: 기본 스페인 여행 · 정산 요약');
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.waitForSelector('.hero');
+  await page.waitForTimeout(400);
+
+  assert.equal(await page.title(), 'Trip helper✈️');
+  assert.equal(await page.getAttribute('meta[name="apple-mobile-web-app-title"]', 'content'), 'Trip helper✈️');
+  const brand = await page.textContent('.brand');
+  assert.match(brand, /Trip helper/);
+
+  await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'));
+  const heroText = await page.textContent('.hero');
+  assert.match(heroText, /정산할 금액/);
+  assert.match(heroText, /A가족/);
+  assert.match(heroText, /B가족/);
+
+  const chips = await page.$$('#peopleStrip .person-chip:not(.is-add)');
+  assert.equal(chips.length, 2, '두 가족 칩');
+  await shot(page, '01-settle.png');
+
+  const tripBefore = (await api('/api/trips')).data.trips.find((t) => t.name.includes('스페인'));
+
+  // ── 2. 지출 추가 ──────────────────────────────
+  step('2. 지출 추가 → 정산 금액 반영');
+  await page.click('#btnAdd');
+  await page.waitForSelector('#exTitle');
+  await page.fill('#exTitle', '저녁 식사');
+  await page.fill('#exAmount', '120');
+  await page.fill('#exDate', '2026-12-20');
+  await page.click('#exPayers .chip >> nth=1'); // B가족 결제
+  await page.waitForTimeout(200);
+  await shot(page, '02-expense-form.png');
+  await page.click('[data-act="save-expense"]');
+  await page.waitForSelector('#sheetLayer:not(.is-open)');
+  await page.waitForTimeout(500);
+
+  const afterExpense = (await api(`/api/trips/${tripBefore.id}`)).data;
+  const expectedTotal = 180 * 1500 + 45000 + 120 * 1500;
+  assert.equal(afterExpense.settlement.totalKrw, expectedTotal, '총 지출 = 315,000 + 180,000');
+  const viewText = await page.textContent('#view');
+  assert.match(viewText, /저녁 식사/);
+  assert.match(viewText, /180,000/, '원화 환산이 목록에 보인다');
+  await shot(page, '03-settle-after-expense.png');
+
+  // ── 3. 인원 변경 재계산 ───────────────────────
+  step('3. 인원 변경 → 인원 비례 부담 재계산');
+  const beforeA = afterExpense.settlement.participants[0].burden;
+  await page.click('#btnSettings');
+  await page.waitForSelector('#stName');
+  await page.waitForTimeout(300);
+  await shot(page, '04-settings.png');
+
+  // A가족 이름 칩 → 참여자 시트에서 아이 수 2 → 0
+  await page.click('.card.list .list-row >> nth=0');
+  await page.waitForSelector('#ptAdults');
+  await page.click('[data-act="pt-k-minus"]');
+  await page.click('[data-act="pt-k-minus"]');
+  await page.waitForTimeout(200);
+  await shot(page, '05-participant.png');
+  await page.click('[data-act="save-participant"]');
+  await page.waitForSelector('#sheetLayer:not(.is-open)');
+  await page.waitForTimeout(700);
+
+  const afterCount = (await api(`/api/trips/${tripBefore.id}`)).data;
+  const aAfter = afterCount.settlement.participants.find((p) => p.id === afterExpense.settlement.participants[0].id);
+  assert.equal(afterCount.participants[0].kids, 0);
+  assert.notEqual(aAfter.burden, beforeA, '인원 변경 후 부담액이 달라진다');
+  assert.equal(afterCount.settlement.participants.reduce((s, p) => s + p.burden, 0), expectedTotal);
+  await page.waitForTimeout(400);
+  const burdenText = await page.textContent('#view');
+  assert.match(burdenText, /어른2·아이0/);
+
+  // ── 4. 호칭 변경 반영 ────────────────────────
+  step('4. 가족 호칭 변경 → 정산·지출·모달에 즉시 반영');
+  await page.click('#peopleStrip .person-chip >> nth=0');
+  await page.waitForSelector('#ptName');
+  await page.fill('#ptName', '김家');
+  await page.click('[data-act="save-participant"]');
+  await page.waitForTimeout(700);
+
+  assert.match(await page.textContent('#peopleStrip'), /김家/);
+  const settleText = await page.textContent('#view');
+  assert.match(settleText, /김家/, '정산 히어로/목록에 새 호칭');
+  assert.match(settleText, /김家 결제/, '지출 목록 결제자 이름');
+  await shot(page, '06-renamed.png');
+
+  await page.click('#btnAdd');
+  await page.waitForSelector('#exPayers');
+  const payerChips = await page.$$eval('#exPayers .chip', (els) => els.map((e) => e.textContent.trim()));
+  assert.ok(payerChips.some((c) => c.includes('김家')), `지출 모달 결제자 칩에 새 호칭: ${payerChips.join(',')}`);
+  assert.ok(payerChips.some((c) => c.includes('B가족')), '다른 가족 이름도 유지');
+  await shot(page, '07-expense-modal-honorific.png');
+  await page.click('.sheet-close');
+  await page.waitForTimeout(300);
+
+  // ── 5. 일정 ──────────────────────────────────
+  step('5. 일정 추가 · 구글지도 링크 · 일정에서 지출 기록');
+  await page.click('#tabs .tab[data-tab="plan"]');
+  await page.waitForTimeout(300);
+  await page.click('#btnAdd');
+  await page.waitForSelector('#itPlace');
+  await page.selectOption('#itDay', '2');
+  await page.fill('#itTime', '10:00');
+  await page.fill('#itPlace', '사그라다 파밀리아');
+  await page.fill('#itRegion', '바르셀로나');
+  await page.fill('#itMemo', '예약 10:00 · 아이들은 무료');
+  await page.waitForTimeout(200);
+  await shot(page, '08-itinerary-form.png');
+  await page.click('[data-act="save-itinerary"]');
+  await page.waitForTimeout(700);
+
+  const planText = await page.textContent('#view');
+  assert.match(planText, /사그라다 파밀리아/);
+  assert.match(planText, /Day 2/);
+  const mapLinks = await page.$$eval('.itn a.mini-btn', (els) => els.map((e) => ({ href: e.getAttribute('href'), target: e.getAttribute('target'), text: e.textContent })));
+  const mapHref = mapLinks[mapLinks.length - 1].href;
+  assert.ok(mapHref.startsWith('https://www.google.com/maps/search/?api=1&query='), `지도 링크: ${mapHref}`);
+  assert.ok(decodeURIComponent(mapHref).includes('사그라다 파밀리아'), `지도 링크에 장소명: ${decodeURIComponent(mapHref)}`);
+
+  // 지도 링크가 새 창으로
+  assert.equal(mapLinks[mapLinks.length - 1].target, '_blank');
+
+  // 일정 → 지출 기록 (항목명·날짜 자동 채움)
+  const cards = await page.$$('.itn');
+  await (await cards[cards.length - 1].$('[data-act="itn-to-expense"]')).click();
+  await page.waitForSelector('#exTitle');
+  assert.equal(await page.inputValue('#exTitle'), '사그라다 파밀리아');
+  assert.equal(await page.inputValue('#exDate'), '2026-12-20');
+  await page.fill('#exAmount', '38');
+  await page.click('[data-act="save-expense"]');
+  await page.waitForTimeout(700);
+  await shot(page, '09-plan.png');
+  const withItnExpense = (await api(`/api/trips/${tripBefore.id}`)).data;
+  assert.ok(withItnExpense.expenses.some((e) => e.title === '사그라다 파밀리아' && e.date === '2026-12-20'));
+
+  // ── 6. 친구 5명 여행 ─────────────────────────
+  step('6. 친구 5명 새 여행 → 5명 균등 + 3명 부분 분담 정산');
+  await page.click('#btnTripSwitch');
+  await page.waitForSelector('[data-act="new-trip"]');
+  await shot(page, '10-trip-switch.png');
+  await page.click('[data-act="new-trip"]');
+  await page.waitForSelector('#ntName');
+  await page.fill('#ntName', '🇯🇵 오사카 친구 여행');
+  await page.fill('#ntSub', '친구 5명 우정 여행');
+  await page.fill('#ntStart', '2027-01-10');
+  await page.fill('#ntEnd', '2027-01-13');
+  await page.selectOption('#ntCur', 'JPY');
+  await page.fill('#ntRate', '9.2');
+  await page.click('#ntTemplate button[data-tpl="friends"]');
+  await page.waitForTimeout(200);
+  await shot(page, '11-new-trip-friends.png');
+  await page.click('[data-act="create-trip"]');
+  await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('오사카'), null, { timeout: 15000 });
+  await page.waitForTimeout(600);
+
+  const friendChips = await page.$$('#peopleStrip .person-chip:not(.is-add)');
+  assert.equal(friendChips.length, 5, '친구 5명 칩');
+  const newTrip = (await api('/api/trips')).data.trips.find((t) => t.name.includes('오사카'));
+  assert.equal(newTrip.participantCount, 5);
+
+  // 5명 균등: 300,000원
+  await page.click('#btnAdd');
+  await page.waitForSelector('#exTitle');
+  await page.fill('#exTitle', '료칸 2박');
+  await page.fill('#exAmount', '300000');
+  await page.click('#exCur button[data-val="base"]');
+  await page.click('[data-act="save-expense"]');
+  await page.waitForTimeout(700);
+
+  // 3명만 부담: 택시 90,000원 (친구1,2,3)
+  await page.click('#btnAdd');
+  await page.fill('#exTitle', '택시');
+  await page.fill('#exAmount', '90000');
+  await page.click('#exCur button[data-val="base"]');
+  await page.click('#exPayers .chip >> nth=1');
+  await page.click('.radio[data-mode="select"]');
+  await page.waitForTimeout(250);
+  const selRows = await page.$$('#exExtra [data-sel]');
+  assert.equal(selRows.length, 5);
+  await (await selRows[3]).click();
+  await (await selRows[4]).click();
+  await page.waitForTimeout(250);
+  await shot(page, '12-split-select.png');
+  await page.click('[data-act="save-expense"]');
+  await page.waitForTimeout(800);
+
+  const friendsTrip = (await api(`/api/trips/${newTrip.id}`)).data;
+  assert.equal(friendsTrip.settlement.totalKrw, 390000);
+  const fNet = Object.fromEntries(friendsTrip.settlement.participants.map((p) => [p.name, p.net]));
+  assert.equal(fNet['친구 1'], 210000);
+  assert.equal(fNet['친구 2'], 0);
+  assert.equal(fNet['친구 3'], -90000);
+  assert.equal(fNet['친구 4'], -60000);
+  assert.equal(fNet['친구 5'], -60000);
+  assert.equal(friendsTrip.settlement.transfers.length, 3);
+
+  const friendView = await page.textContent('#view');
+  assert.match(friendView, /210,000/, '정산할 금액 210,000원');
+  const transferRows = await page.$$('.transfer');
+  assert.equal(transferRows.length, 3, '송금 3건');
+  await shot(page, '13-friends-settle.png');
+
+  // ── 7. 두 기기 동기화 ────────────────────────
+  step('7. 두 기기 동시 사용 — 5초 안에 자동 반영');
+  const ctx2 = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'ko-KR' });
+  const page2 = await ctx2.newPage();
+  page2.on('pageerror', (e) => errors.push(`page2 pageerror: ${e.message}`));
+  page2.on('console', (m) => { if (m.type() === 'error') errors.push(`page2 console: ${m.text()}`); });
+  await page2.goto(`${base}/t/${friendsTrip.code}`, { waitUntil: 'networkidle' });
+  await page2.waitForSelector('.hero');
+  await page2.waitForTimeout(400);
+  assert.match(await page2.textContent('#tripName'), /오사카/);
+  assert.match(await page2.textContent('#view'), /390,000/);
+
+  // 기기 2 에서 지출 추가 → 기기 1 이 폴링으로 받는다
+  await page2.click('#btnAdd');
+  await page2.waitForSelector('#exTitle');
+  await page2.fill('#exTitle', '편의점');
+  await page2.fill('#exAmount', '5000');
+  await page2.click('#exCur button[data-val="base"]');
+  await page2.click('[data-act="save-expense"]');
+  await page2.waitForTimeout(600);
+
+  await page.waitForFunction(() => document.querySelector('#view').textContent.includes('편의점'), null, { timeout: 12000 });
+  assert.match(await page.textContent('#view'), /395,000/);
+  await shot(page, '14-sync.png');
+
+  // ── 8. 여행 전환 복귀 ────────────────────────
+  step('8. 여행 전환으로 스페인 여행 복귀');
+  await page.click('#btnTripSwitch');
+  await page.waitForSelector('[data-act="switch-trip"]');
+  const rows = await page.$$('[data-act="switch-trip"]');
+  await (await rows[rows.length - 1]).click();
+  await page.waitForTimeout(800);
+  assert.match(await page.textContent('#tripName'), /스페인/);
+  assert.match(await page.textContent('#view'), /김家/);
+
+  // ── 8-1. ?trip=코드 로 바로 열기 ─────────────
+  step('8-1. ?trip=코드 링크로 바로 열기');
+  await page.goto(`${base}/?trip=${friendsTrip.code}`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('.hero');
+  await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('오사카'));
+  assert.match(await page.textContent('#view'), /395,000/, '링크로 연 여행의 총 지출');
+
+  // ── 9. PWA ───────────────────────────────────
+  step('9. PWA · 홈 화면 추가 준비 상태');
+  const manifestHref = await page.getAttribute('link[rel="manifest"]', 'href');
+  assert.equal(manifestHref, '/manifest.webmanifest');
+  const iconHref = await page.getAttribute('link[rel="apple-touch-icon"]', 'href');
+  assert.equal(iconHref, '/icons/apple-touch-icon.png');
+  const swReady = await page.evaluate(async () => {
+    if (!('serviceWorker' in navigator)) return 'unsupported';
+    try {
+      const reg = await navigator.serviceWorker.register('/sw.js');
+      return reg ? 'registered' : 'none';
+    } catch (e) { return 'error: ' + e.message; }
+  });
+  assert.equal(swReady, 'registered');
+  const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
+  assert.match(viewport, /viewport-fit=cover/);
+  assert.match(viewport, /maximum-scale=1/);
+
+  // ── 9-1. 마지막 여행 삭제 → 새 여행 안내 ─────
+  step('9-1. 여행을 모두 지우면 새 여행 안내');
+  for (let i = 0; i < 2; i++) {
+    await page.click('#btnSettings');
+    await page.waitForSelector('[data-act="delete-trip"]');
+    await page.click('[data-act="delete-trip"]');
+    await page.waitForSelector('[data-act="confirm-yes"]');
+    await page.click('[data-act="confirm-yes"]');
+    await page.waitForTimeout(900);
+  }
+  const left = (await api('/api/trips')).data.trips.length;
+  assert.equal(left, 0, '모든 여행이 삭제됨');
+  await page.waitForSelector('#ntName', { timeout: 8000 });
+  assert.match(await page.textContent('#sheetTitle'), /새 여행/);
+
+  // ── 10. 콘솔 오류 ────────────────────────────
+  step('10. 콘솔 오류 확인');
+  const realErrors = errors.filter((e) => !/favicon\.ico|Failed to load resource: the server responded with a status of 404/i.test(e));
+  assert.deepEqual(realErrors, [], `콘솔 오류: ${realErrors.join(' | ')}`);
+
+  await browser.close();
+  console.log(`\n✅ 모든 UI 테스트 통과 (${steps.length}단계)`);
+  console.log(`스크린샷: ${SHOT_DIR}`);
+}
+
+run()
+  .catch(async (err) => {
+    console.error('\n❌ UI 테스트 실패:', err.message);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    try { if (browser) await browser.close(); } catch { /* 이미 닫힘 */ }
+    if (server) server.kill();
+  });

@@ -1,0 +1,17 @@
+{
+  "name": "Trip helper✈️",
+  "short_name": "Trip helper✈️",
+  "description": "여행 경비 정산과 일정·지도를 가족·친구와 링크 하나로 함께 쓰는 앱",
+  "lang": "ko",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#FFFCF4",
+  "theme_color": "#FFFCF4",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

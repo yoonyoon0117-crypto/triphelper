@@ -1,0 +1,75 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <!-- 맑은 하늘 바탕 -->
+    <linearGradient id="skyBase" x1="0.15" y1="0" x2="0.75" y2="1">
+      <stop offset="0" stop-color="#4DAEE7"/>
+      <stop offset="0.52" stop-color="#82CBEF"/>
+      <stop offset="1" stop-color="#BFE5FA"/>
+    </linearGradient>
+
+    <!-- 아래쪽에 은은하게 번지는 라일락 -->
+    <radialGradient id="lilacGlow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#C9B1F2" stop-opacity="0.62"/>
+      <stop offset="0.55" stop-color="#D5C2F6" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#DFD0F9" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="lilacWisp" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#DCCCF9" stop-opacity="0.42"/>
+      <stop offset="1" stop-color="#DCCCF9" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- 미색 해 빛 -->
+    <radialGradient id="sunHalo" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FFF9E8" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#FFF9E8" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- 바탕 -->
+  <rect width="512" height="512" fill="url(#skyBase)"/>
+
+  <!-- MOTIF:START -->
+  <!-- 라일락은 아래쪽 한 곳에만 살짝 -->
+  <ellipse cx="196" cy="500" rx="300" ry="152" fill="url(#lilacGlow)" transform="rotate(-14 196 500)"/>
+  <ellipse cx="404" cy="404" rx="240" ry="82" fill="url(#lilacWisp)" transform="rotate(-16 404 404)"/>
+  <ellipse cx="96" cy="474" rx="190" ry="104" fill="url(#lilacWisp)" opacity="0.85" transform="rotate(-12 96 474)"/>
+
+  <!-- 미색 해 -->
+  <circle cx="424" cy="92" r="84" fill="url(#sunHalo)"/>
+  <circle cx="424" cy="92" r="40" fill="#FFF6DC"/>
+
+  <!-- 미색 구름 -->
+  <g fill="#FFFDF4">
+    <ellipse cx="96" cy="118" rx="31" ry="13"/>
+    <ellipse cx="126" cy="107" rx="18" ry="9"/>
+  </g>
+  <g fill="#FFFDF4">
+    <ellipse cx="94" cy="430" rx="54" ry="22"/>
+    <ellipse cx="142" cy="414" rx="28" ry="15"/>
+    <ellipse cx="48" cy="442" rx="22" ry="12"/>
+  </g>
+  <g fill="#FFFDF4">
+    <ellipse cx="430" cy="452" rx="31" ry="13"/>
+    <ellipse cx="456" cy="442" rx="17" ry="9"/>
+  </g>
+  <!-- 구름 아래쪽에만 스며든 라일락 그늘 -->
+  <ellipse cx="98" cy="442" rx="46" ry="9" fill="#E6DAF9" opacity="0.75"/>
+  <ellipse cx="432" cy="461" rx="26" ry="6" fill="#E6DAF9" opacity="0.6"/>
+
+  <!-- 비행 궤적 -->
+  <path d="M62 476C118 424 166 398 214 380" stroke="#FFFFFF" stroke-width="11" stroke-linecap="round"
+        stroke-dasharray="1 24" fill="none" opacity="0.82"/>
+
+  <!-- 종이비행기 (미색) -->
+  <g transform="translate(266 240) rotate(-12) scale(0.86)">
+    <polygon points="145,-144 -145,-32 1,-4" fill="#FFFDF3"/>
+    <polygon points="145,-144 1,-4 -15,144" fill="#F7EEDA"/>
+    <path d="M145 -144 1 -4" stroke="#E6D5B0" stroke-width="7" stroke-linecap="round"/>
+  </g>
+
+  <!-- 반짝임 -->
+  <path d="M116 246l5 13 13 5-13 5-5 13-5-13-13-5 13-5z" fill="#FFFDF4" opacity="0.88"/>
+  <path d="M366 330l4 10 10 4-10 4-4 10-4-10-10-4 10-4z" fill="#FFFFFF" opacity="0.78"/>
+  <circle cx="392" cy="248" r="4.5" fill="#FFFFFF" opacity="0.7"/>
+  <!-- MOTIF:END -->
+</svg>
