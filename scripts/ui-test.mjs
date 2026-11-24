@@ -108,14 +108,49 @@ async function run() {
   const brand = await page.textContent('.brand');
   assert.match(brand, /Trip helper/);
 
+  // Cart helper 스타일 골격: 글로시 상단 바 + 하단 고정 탭 3개 + 새로고침
+  const tabs = await page.$$eval('#tabbar .tab', (els) => els.map((e) => e.dataset.tab));
+  assert.deepEqual(tabs, ['settle', 'plan', 'settings'], '하단 탭: 정산·일정·설정');
+  const tabLabels = await page.$$eval('#tabbar .tab-label', (els) => els.map((e) => e.textContent.trim()));
+  assert.deepEqual(tabLabels, ['정산', '일정', '설정']);
+  assert.ok(await page.$('#btnRefresh'), '상단 새로고침 버튼');
+  const barBg = await page.$eval('.appbar', (el) => getComputedStyle(el).backgroundImage);
+  assert.match(barBg, /linear-gradient/, '상단 바 글로시 그라데이션');
+  const fontFamily = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
+  assert.match(fontFamily, /-apple-system|Apple SD Gothic Neo/, `폰트: ${fontFamily}`);
+  const tabbarPos = await page.$eval('#tabbar', (el) => getComputedStyle(el).position);
+  assert.equal(tabbarPos, 'fixed', '하단 탭 바 고정');
+
   await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'));
   const heroText = await page.textContent('.hero');
   assert.match(heroText, /정산할 금액/);
   assert.match(heroText, /A가족/);
   assert.match(heroText, /B가족/);
+  assert.match(heroText, /총 지출/);
+  assert.match(heroText, /1인당 평균/);
+  assert.match(heroText, /송금/);
+  const summaryText = await page.textContent('.trip-summary');
+  assert.match(summaryText, /12\.19 – 12\.26/, '여행 요약 바 날짜');
+  assert.match(summaryText, /1 EUR = 1,500원/, '여행 요약 바 환율');
 
   const chips = await page.$$('#peopleStrip .person-chip:not(.is-add)');
   assert.equal(chips.length, 2, '두 가족 칩');
+
+  // 아바타: 파스텔 틴트 사각(스퀘어클) + 은은한 테두리
+  const av = await page.$eval('#peopleStrip .avatar', (el) => {
+    const c = getComputedStyle(el);
+    return { radius: c.borderRadius, bg: c.backgroundColor, border: c.borderColor, color: c.color };
+  });
+  assert.equal(av.bg, 'rgb(231, 243, 253)', `스카이 틴트 배경: ${av.bg}`);
+  assert.equal(av.color, 'rgb(20, 103, 163)', `포인트 글자: ${av.color}`);
+  assert.notEqual(av.radius, '50%', '동그라미가 아닌 사각 아바타');
+  assert.match(av.radius, /^\d+px$/);
+  assert.match(av.border, /rgb\(201, 228, 248\)/, '은은한 테두리');
+
+  // 주요 CTA는 글로시 하늘색
+  const ctaBg = await page.$eval('#btnAdd', (el) => getComputedStyle(el).backgroundImage);
+  assert.match(ctaBg, /linear-gradient/);
+  assert.match(await page.textContent('#btnAdd'), /지출 추가하기/);
   await shot(page, '01-settle.png');
 
   const tripBefore = (await api('/api/trips')).data.trips.find((t) => t.name.includes('스페인'));
@@ -145,13 +180,36 @@ async function run() {
   // ── 3. 인원 변경 재계산 ───────────────────────
   step('3. 인원 변경 → 인원 비례 부담 재계산');
   const beforeA = afterExpense.settlement.participants[0].burden;
-  await page.click('#btnSettings');
+  await page.click('#tabbar .tab[data-tab="settings"]');
   await page.waitForSelector('#stName');
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
   await shot(page, '04-settings.png');
 
+  // 설정 탭 하나에 여행 정보·참여자·공유 링크·자동 동기화·여행 관리가 모두 모여 있다
+  const settingsText = await page.textContent('#view');
+  assert.match(settingsText, /여행 정보/);
+  assert.match(settingsText, /함께 쓰는 링크/);
+  assert.match(settingsText, /자동 동기화/);
+  assert.match(settingsText, /새 여행 만들기/);
+  assert.match(settingsText, /여행 삭제/);
+  assert.ok(await page.$('#syncBadge'), '동기화 상태 표시');
+  const shareUrl = await page.textContent('#view .share-box .url');
+  assert.match(shareUrl, /\/t\/[A-Z0-9]{6}$/, `공유 링크 /t/CODE: ${shareUrl}`);
+
+  // 설정 탭에서 여행 정보 저장 → 서버에 남고 상단 pill에도 반영
+  await page.fill('#stSub', '두 가족 첫 유럽 여행 · 겨울');
+  await page.click('#view [data-act="save-settings"]');
+  await page.waitForTimeout(800);
+  const savedTrip = (await api(`/api/trips/${tripBefore.id}`)).data;
+  assert.equal(savedTrip.subtitle, '두 가족 첫 유럽 여행 · 겨울', '설정 탭 저장이 서버에 반영');
+
+  // 상단 새로고침 버튼으로 최신 상태 다시 불러오기
+  await page.click('#btnRefresh');
+  await page.waitForTimeout(900);
+  assert.match(await page.textContent('#toast'), /불러왔어요/);
+
   // A가족 이름 칩 → 참여자 시트에서 아이 수 2 → 0
-  await page.click('.card.list .list-row >> nth=0');
+  await page.click('#view [data-act="edit-participant"] >> nth=0');
   await page.waitForSelector('#ptAdults');
   await page.click('[data-act="pt-k-minus"]');
   await page.click('[data-act="pt-k-minus"]');
@@ -166,6 +224,10 @@ async function run() {
   assert.equal(afterCount.participants[0].kids, 0);
   assert.notEqual(aAfter.burden, beforeA, '인원 변경 후 부담액이 달라진다');
   assert.equal(afterCount.settlement.participants.reduce((s, p) => s + p.burden, 0), expectedTotal);
+  assert.match(await page.textContent('#view'), /참여자/);
+
+  // 정산 탭으로 돌아가 재계산 확인
+  await page.click('#tabbar .tab[data-tab="settle"]');
   await page.waitForTimeout(400);
   const burdenText = await page.textContent('#view');
   assert.match(burdenText, /어른2·아이0/);
@@ -195,8 +257,9 @@ async function run() {
 
   // ── 5. 일정 ──────────────────────────────────
   step('5. 일정 추가 · 구글지도 링크 · 일정에서 지출 기록');
-  await page.click('#tabs .tab[data-tab="plan"]');
-  await page.waitForTimeout(300);
+  await page.click('#tabbar .tab[data-tab="plan"]');
+  await page.waitForTimeout(400);
+  assert.match(await page.textContent('#btnAdd'), /일정 추가하기/);
   await page.click('#btnAdd');
   await page.waitForSelector('#itPlace');
   await page.selectOption('#itDay', '2');
@@ -363,7 +426,7 @@ async function run() {
   // ── 9-1. 마지막 여행 삭제 → 새 여행 안내 ─────
   step('9-1. 여행을 모두 지우면 새 여행 안내');
   for (let i = 0; i < 2; i++) {
-    await page.click('#btnSettings');
+    await page.click('#tabbar .tab[data-tab="settings"]');
     await page.waitForSelector('[data-act="delete-trip"]');
     await page.click('[data-act="delete-trip"]');
     await page.waitForSelector('[data-act="confirm-yes"]');

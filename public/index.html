@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <title>Trip helper✈️</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
-<meta name="theme-color" content="#FFFCF4" />
+<meta name="theme-color" content="#1B7AC0" />
 <meta name="description" content="여행 경비 정산과 일정을 가족·친구와 링크 하나로 함께 쓰는 앱" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <meta name="mobile-web-app-capable" content="yes" />
@@ -18,17 +18,17 @@
 </head>
 <body>
 <div class="app" id="app">
-  <header class="topbar">
-    <div class="topbar-row">
-      <span class="brand">Trip helper✈️</span>
-      <div class="topbar-tools">
-        <span class="sync" id="syncBadge" title="자동 동기화"><span class="sync-dot"></span><span id="syncText">연결됨</span></span>
-        <button class="icon-btn" id="btnSettings" aria-label="여행 설정">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 13.2a7.7 7.7 0 0 0 0-2.4l1.6-1.2-1.7-3-1.9.8a7.6 7.6 0 0 0-2-1.2L15.1 4h-3.4l-.3 2.2c-.7.2-1.4.6-2 1.2l-2-.8-1.6 3 1.6 1.2a7.7 7.7 0 0 0 0 2.4L5.8 14.4l1.6 3 2-.8c.6.5 1.3.9 2 1.2l.3 2.2h3.4l.3-2.2c.7-.3 1.4-.7 2-1.2l2 .8 1.6-3-1.6-1.2Z"/></svg>
-        </button>
+  <header class="appbar">
+    <div class="appbar-row">
+      <div class="brand">
+        <img class="brand-logo" src="/icons/icon-192.png" alt="" width="32" height="32" />
+        <span class="brand-text">Trip helper</span>
       </div>
+      <button class="appbar-btn" id="btnRefresh" aria-label="새로고침" title="새로고침">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.3 6.3"/><path d="M20 4.5V11h-6.4"/></svg>
+      </button>
     </div>
-    <button class="trip-pill" id="btnTripSwitch">
+    <button class="trip-pill" id="btnTripSwitch" aria-label="여행 선택">
       <span class="trip-pill-main">
         <span class="trip-name" id="tripName">여행을 불러오는 중…</span>
         <span class="trip-meta" id="tripMeta"></span>
@@ -37,22 +37,26 @@
         <svg viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></svg>
       </span>
     </button>
-    <div class="people-strip" id="peopleStrip"></div>
   </header>
-
-  <nav class="tabs" id="tabs">
-    <button class="tab is-active" data-tab="settle">정산</button>
-    <button class="tab" data-tab="plan">일정</button>
-    <span class="tab-ink" id="tabInk"></span>
-  </nav>
 
   <main class="view" id="view">
     <div class="loading">불러오는 중…</div>
   </main>
 
-  <div class="addbar" id="addbar">
-    <button class="add-btn" id="btnAdd"></button>
-  </div>
+  <nav class="tabbar" id="tabbar" aria-label="화면 선택">
+    <button class="tab is-active" data-tab="settle">
+      <span class="tab-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M6 3h12a1 1 0 0 1 1 1v17l-3.5-2-3.5 2-3.5-2L5 21V4a1 1 0 0 1 1-1Z"/><path d="M9 8h6M9 12h6"/></svg></span>
+      <span class="tab-label">정산</span>
+    </button>
+    <button class="tab" data-tab="plan">
+      <span class="tab-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M8 3v4M16 3v4M3.5 10.5h17"/><path d="M8 15h2M14 15h2"/></svg></span>
+      <span class="tab-label">일정</span>
+    </button>
+    <button class="tab" data-tab="settings">
+      <span class="tab-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 13.2a7.7 7.7 0 0 0 0-2.4l1.6-1.2-1.7-3-1.9.8a7.6 7.6 0 0 0-2-1.2L15.1 4h-3.4l-.3 2.2c-.7.2-1.4.6-2 1.2l-2-.8-1.6 3 1.6 1.2a7.7 7.7 0 0 0 0 2.4L5.8 14.4l1.6 3 2-.8c.6.5 1.3.9 2 1.2l.3 2.2h3.4l.3-2.2c.7-.3 1.4-.7 2-1.2l2 .8 1.6-3-1.6-1.2Z"/></svg></span>
+      <span class="tab-label">설정</span>
+    </button>
+  </nav>
 
   <div class="sheet-layer" id="sheetLayer" aria-hidden="true">
     <div class="sheet-backdrop" data-act="close-sheet"></div>
@@ -68,7 +72,7 @@
     </div>
   </div>
 
-  <div class="toast" id="toast" role="status" aria-live=" polite"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
 </div>
 <script src="/app.js" defer></script>
 </body>

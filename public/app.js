@@ -5,7 +5,17 @@
   const API = '/api';
   const LS_LAST = 'trip-helper:last';
   const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
-  const PCOLORS = ['#1a79b8', '#22705f', '#4a6fbf', '#b4586b', '#22707f', '#6d5ea8', '#506d80', '#9a6b1c'];
+  // 트렌디한 파스텔 틴트 팔레트 — 배경 / 은은한 테두리 / 선명한 포인트 글자
+  const PALETTE = [
+    { bg: '#E7F3FD', line: '#C9E4F8', ink: '#1467A3' }, // 스카이블루
+    { bg: '#F0ECFE', line: '#DBD2FA', ink: '#5B43B8' }, // 라일락
+    { bg: '#E5F7F2', line: '#C4EADD', ink: '#177563' }, // 민트
+    { bg: '#FFF2E6', line: '#FADCC0', ink: '#A85D22' }, // 피치
+    { bg: '#FDECF2', line: '#F8D3DF', ink: '#B23A5B' }, // 로즈
+    { bg: '#FDF7DC', line: '#F2E4AC', ink: '#8A6A15' }, // 레몬
+    { bg: '#EAF0FE', line: '#D3DEFB', ink: '#3A55B5' }, // 페리윙클
+    { bg: '#EAF4EE', line: '#CFE7DA', ink: '#2E7A57' }, // 세이지
+  ];
   const SYMBOLS = {
     KRW: '₩', EUR: '€', USD: '$', JPY: '¥', GBP: '£', CHF: 'CHF ', THB: '฿', VND: '₫', TWD: 'NT$',
     SGD: 'S$', AUD: 'A$', CAD: 'C$', CNY: '¥', HKD: 'HK$', PHP: '₱', TRY: '₺', AED: 'AED ',
@@ -85,13 +95,16 @@
     const clean = s.replace(/^[^\w가-힣]+/, '');
     return (clean[0] || '?').toUpperCase();
   };
-  const pcolor = (id) => {
+  const paletteOf = (id) => {
     const idx = Math.max(0, (state.trip?.participants || []).findIndex((p) => p.id === id));
-    return PCOLORS[idx % PCOLORS.length];
+    return PALETTE[idx % PALETTE.length];
   };
   const avatar = (name, id, size = 30) => {
-    const c = pcolor(id);
-    return `<span class="avatar" style="background:${c};${size !== 30 ? `width:${size}px;height:${size}px;font-size:${Math.round(size * 0.42)}px;` : ''}">${esc(initial(name))}</span>`;
+    const c = paletteOf(id);
+    const extra = size !== 30
+      ? `width:${size}px;height:${size}px;border-radius:${Math.max(6, Math.round(size * 0.37))}px;font-size:${Math.round(size * 0.45)}px;`
+      : '';
+    return `<span class="avatar" style="background:${c.bg};border-color:${c.line};color:${c.ink};${extra}">${esc(initial(name))}</span>`;
   };
   const personLabel = (p) => (p.type === 'person' ? '개인' : `어른 ${p.adults}·아이 ${p.kids}`);
   const headsOf = (p) => (p.type === 'person' ? 1 : (Number(p.adults) || 0) + (Number(p.kids) || 0));
@@ -178,6 +191,9 @@
   }
 
   // ── 서버 상태 반영 ───────────────────────────────────────
+  let syncKind = 'ok';
+  let syncText = '자동 동기화';
+
   function applyTrip(trip, { soft = false } = {}) {
     const sameTrip = state.trip && state.trip.id === trip.id;
     state.trip = trip;
@@ -185,10 +201,12 @@
     state.lastSync = new Date();
     localStorage.setItem(LS_LAST, trip.code);
     renderHeader();
-    renderStrip();
-    renderTabs();
     if (!sameTrip) state.tab = 'settle';
-    renderView();
+    renderTabs();
+    // 설정 탭에서 입력하는 중이면 자동 동기화가 화면(입력값)을 갈아엎지 않게 한다
+    const focused = document.activeElement;
+    const typing = focused && focused.closest && focused.closest('#view') && /^(INPUT|SELECT|TEXTAREA)$/.test(focused.tagName);
+    if (!(soft && state.tab === 'settings' && typing)) renderView();
     if (!soft && !sameTrip) window.scrollTo({ top: 0 });
     const url = `/t/${trip.code}`;
     if (location.pathname !== url) history.replaceState({}, '', url);
@@ -196,13 +214,17 @@
   }
 
   function setSync(kind, text) {
+    syncKind = kind;
+    syncText = text || (kind === 'syncing' ? '맞추는 중' : kind === 'off' ? '오프라인' : '자동 동기화');
+    paintSync();
+  }
+  function paintSync() {
     const el = $('#syncBadge');
-    el.classList.toggle('is-syncing', kind === 'syncing');
-    el.classList.toggle('is-off', kind === 'off');
-    if (text) { $('#syncText').textContent = text; return; }
-    if (kind === 'ok') $('#syncText').textContent = '자동 동기화';
-    if (kind === 'syncing') $('#syncText').textContent = '맞추는 중';
-    if (kind === 'off') $('#syncText').textContent = '오프라인';
+    const txt = $('#syncText');
+    if (!el || !txt) return; // 동기화 표시는 설정 탭에 있어요
+    el.classList.toggle('is-syncing', syncKind === 'syncing');
+    el.classList.toggle('is-off', syncKind === 'off');
+    txt.textContent = syncText;
   }
 
   // ── 렌더: 헤더 ───────────────────────────────────────────
@@ -210,15 +232,15 @@
     const t = state.trip;
     if (!t) return;
     $('#tripName').textContent = t.name;
-    $('#tripMeta').textContent = `${md(t.startDate)} – ${md(t.endDate)} · ${peopleText()}`;
+    $('#tripMeta').textContent = `${md(t.startDate)} – ${md(t.endDate)} · ${dayCount(t)}일 · ${peopleText()}`;
   }
 
-  function renderStrip() {
+  function stripHtml() {
     const t = state.trip;
-    if (!t) return;
-    $('#peopleStrip').innerHTML = t.participants.map((p) => `
+    if (!t) return '';
+    return t.participants.map((p) => `
       <button class="person-chip" data-act="edit-participant" data-id="${p.id}">
-        ${avatar(p.name, p.id, 22)}
+        ${avatar(p.name, p.id, 21)}
         <span class="name">${esc(p.name)}</span>
         ${p.type === 'person' ? '' : `<span class="count">${headsOf(p)}명</span>`}
       </button>`).join('') + `
@@ -226,25 +248,46 @@
   }
 
   function renderTabs() {
-    $('#tabs').dataset.tab = state.tab;
-    $$('#tabs .tab').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === state.tab));
-    $('#btnAdd').textContent = state.tab === 'settle' ? '＋ 지출 추가' : '＋ 일정 추가';
+    $$('#tabbar .tab').forEach((b) => {
+      const on = b.dataset.tab === state.tab;
+      b.classList.toggle('is-active', on);
+      if (on) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
   }
 
   // ── 렌더: 정산 ───────────────────────────────────────────
   function renderSettle() {
     const t = state.trip;
     const s = t.settlement;
-    const parts = t.participants;
 
     const transferSum = s.transfers.reduce((a, x) => a + x.amount, 0);
+    const perHead = totalHeads() > 0 ? s.totalKrw / totalHeads() : 0;
+    const fxSub = s.byCurrency.filter((c) => c.currency !== t.baseCurrency).map((c) => `≈ ${money(c.amount, c.currency)}`).join(' · ');
+
+    const summary = `
+      <section class="trip-summary fade-in">
+        <div class="summary-row">
+          <span class="summary-item"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M8 3v4M16 3v4M3.5 10.5h17"/></svg>${md(t.startDate)} – ${md(t.endDate)} · ${dayCount(t)}일</span>
+          ${t.localCurrency === t.baseCurrency ? '' : `<span class="summary-sep"></span>
+          <span class="summary-item"><svg viewBox="0 0 24 24"><path d="M4 7h13l3 5-3 5H4z"/><path d="M8 11v3M12 11v3"/></svg>1 ${esc(t.localCurrency)} = ${nf(t.exchangeRate, 2)}원</span>`}
+        </div>
+        <div class="people-strip" id="peopleStrip">${stripHtml()}</div>
+      </section>`;
+
     const heroRows = s.transfers.map((x) => `
       <div class="transfer">
-        <span class="who">${avatar(x.from.name, x.from.id, 22)}<span class="name">${esc(x.from.name)}</span></span>
+        <span class="who">${avatar(x.from.name, x.from.id, 20)}<span class="name">${esc(x.from.name)}</span></span>
         <span class="arrow">→</span>
-        <span class="who" style="justify-content:flex-end">${avatar(x.to.name, x.to.id, 22)}<span class="name">${esc(x.to.name)}</span></span>
+        <span class="who to"><span class="name">${esc(x.to.name)}</span>${avatar(x.to.name, x.to.id, 20)}</span>
         <span class="amount krw">${won(x.amount)}</span>
       </div>`).join('');
+
+    const boxes = `
+      <div class="stat-boxes">
+        <div class="stat-box"><span class="k">총 지출</span><span class="v krw">${won(s.totalKrw)}</span><span class="s">${t.expenses.length}건${fxSub ? ` · ${fxSub}` : ''}</span></div>
+        <div class="stat-box"><span class="k">1인당 평균</span><span class="v krw">${won(perHead)}</span><span class="s">${totalHeads()}명 기준</span></div>
+        <div class="stat-box"><span class="k">송금 안내</span><span class="v">${s.transfers.length ? `${s.transfers.length}건` : '없음'}</span><span class="s">${s.transfers.length ? '최소 송금' : '정산 끝'}</span></div>
+      </div>`;
 
     const hero = `
       <section class="hero fade-in">
@@ -253,34 +296,23 @@
         <div class="hero-sub">${s.transfers.length
           ? (s.transfers.length === 1 ? '한 번만 보내면 정산 끝!' : `${s.transfers.length}번 송금하면 딱 맞아요`)
           : (s.totalKrw ? '서로 보낼 돈이 없어요 🎉' : '첫 지출을 기록해 보세요')}</div>
+        ${boxes}
         ${s.transfers.length ? `<div class="hero-list">${heroRows}</div>` : `<div class="hero-empty">${s.totalKrw ? '모두 제 몫만큼 냈어요. 계산할 게 없습니다.' : '지출을 추가하면 누가 누구에게 얼마 보내면 되는지 바로 알려드려요.'}</div>`}
       </section>`;
 
-    const perHead = totalHeads() > 0 ? s.totalKrw / totalHeads() : 0;
-    const stats = `
-      <div class="stats fade-in">
-        <div class="stat">
-          <div class="k">총 지출</div>
-          <div class="v krw">${won(s.totalKrw)}</div>
-          <div class="s">${s.byCurrency.filter((c) => c.currency !== t.baseCurrency).map((c) => `≈ ${money(c.amount, c.currency)}`).join(' · ') || `${t.expenses.length}건 기록`}</div>
-        </div>
-        <div class="stat">
-          <div class="k">1인당 평균</div>
-          <div class="v krw">${won(perHead)}</div>
-          <div class="s">${totalHeads()}명 기준</div>
-        </div>
-      </div>`;
+    const addBtn = `<button class="btn-cta" id="btnAdd" data-act="add-expense">＋ 지출 추가하기</button>`;
 
     const peopleRows = s.participants.map((p) => {
       const net = Math.round(p.net);
       const cls = net > 0 ? 'plus' : net < 0 ? 'minus' : 'zero';
       const label = net > 0 ? `받을 ${won(net)}` : net < 0 ? `보낼 ${won(-net)}` : '딱 맞음';
+      const detail = (p.paid || p.burden) ? `냈어요 ${won(p.paid)} · 부담 ${won(p.burden)}` : '아직 지출 없음';
       return `
         <div class="prow">
           ${avatar(p.name, p.id)}
           <div class="who">
             <div class="name">${esc(p.name)}<span class="tag">${p.type === 'person' ? '개인' : `어른${p.adults}·아이${p.kids}`}</span></div>
-            <div class="detail">냈어요 ${won(p.paid)} · 부담 ${won(p.burden)}</div>
+            <div class="detail">${detail}</div>
           </div>
           <div class="net ${cls}">${label}</div>
         </div>`;
@@ -288,7 +320,7 @@
 
     const peopleCard = `
       <section class="card fade-in">
-        <div class="section-title" style="padding:14px 16px 10px">
+        <div class="section-title" style="padding:13px 14px 9px">
           <h3>참여자별 정산</h3>
           <span class="hint">1인당 부담도 함께 계산</span>
         </div>
@@ -302,7 +334,7 @@
         <section class="card empty fade-in">
           <div class="emo">🧾</div>
           <div class="t">아직 지출이 없어요</div>
-          <div class="s">아래 버튼으로 첫 지출을 기록해 보세요.</div>
+          <div class="s">위의 지출 추가하기 버튼으로 첫 지출을 기록해 보세요.</div>
         </section>`;
     } else {
       const groups = new Map();
@@ -319,6 +351,10 @@
         <section class="card exp-list">
           ${list.map((e) => {
             const payer = findPerson(e.payerId);
+            const rate = Number(t.exchangeRate) || 0;
+            const second = e.currency === 'base'
+              ? (rate > 0 ? `≈ ${money(e.krw / rate, t.localCurrency)}` : '')
+              : won(e.krw);
             return `
             <button class="exp" data-act="edit-expense" data-id="${e.id}">
               ${avatar(payer.name, payer.id)}
@@ -328,9 +364,7 @@
               </div>
               <div class="amt">
                 <div class="a">${money(e.amount, e.currency === 'base' ? t.baseCurrency : t.localCurrency)}</div>
-                <div class="b krw">${e.currency === 'base'
-                  ? (Number(t.exchangeRate) > 0 ? `≈ ${money(e.krw / t.exchangeRate, t.localCurrency)}` : '')
-                  : won(e.krw)}</div>
+                <div class="b krw">${second}</div>
               </div>
             </button>`;
           }).join('')}
@@ -338,7 +372,7 @@
       expenseSection = `<div class="section-title"><h3>지출 내역</h3><span class="hint">${expenses.length}건</span></div>${blocks}`;
     }
 
-    return hero + stats + peopleCard + expenseSection;
+    return summary + hero + addBtn + peopleCard + expenseSection;
   }
 
   function modeLabel(split) {
@@ -366,8 +400,9 @@
   function renderPlan() {
     const t = state.trip;
     const items = t.itinerary;
+    const addBtn = `<button class="btn-cta" id="btnAdd" data-act="add-plan">＋ 일정 추가하기</button>`;
     if (!items.length) {
-      return `
+      return addBtn + `
         <section class="card empty fade-in">
           <div class="emo">🗺️</div>
           <div class="t">일정이 비어 있어요</div>
@@ -394,7 +429,7 @@
                 <div class="itn-place">${esc(it.place)}</div>
                 ${it.region ? `<span class="itn-region">${esc(it.region)}</span>` : ''}
               </div>
-              <button class="icon-btn" style="width:32px;height:32px;box-shadow:none;background:#eff6fb;border-color:transparent" data-act="edit-itinerary" data-id="${it.id}" aria-label="일정 수정">
+              <button class="icon-btn" data-act="edit-itinerary" data-id="${it.id}" aria-label="일정 수정">
                 <svg viewBox="0 0 24 24"><path d="M4 20h4l10-10-4-4L4 16v4Z"/><path d="m14 6 4 4"/></svg>
               </button>
             </div>
@@ -405,16 +440,25 @@
             </div>
           </section>`).join('')}
       </div>`).join('');
-    return blocks;
+    return `<div class="section-title"><h3>일정</h3><span class="hint">${items.length}개 · ${byDay.size}일</span></div>` + addBtn + blocks;
   }
 
   function renderView() {
     if (!state.trip) {
       $('#view').innerHTML = `<section class="card empty"><div class="emo">✈️</div><div class="t">여행을 준비해 볼까요?</div><div class="s">첫 여행을 만들면 링크 하나로 함께 쓸 수 있어요.</div><div style="margin-top:14px"><button class="btn primary" data-act="new-trip">여행 만들기</button></div></section>`;
+      renderTabs();
       return;
     }
     const y = window.scrollY;
-    $('#view').innerHTML = state.tab === 'settle' ? renderSettle() : renderPlan();
+    if (state.tab === 'plan') {
+      $('#view').innerHTML = renderPlan();
+    } else if (state.tab === 'settings') {
+      $('#view').innerHTML = renderSettings();
+      bindSettings();
+    } else {
+      $('#view').innerHTML = renderSettle();
+    }
+    paintSync();
     renderTabs();
     if (y > 0) window.scrollTo({ top: y });
   }
@@ -425,7 +469,6 @@
     localStorage.removeItem(LS_LAST);
     $('#tripName').textContent = '여행이 없어요';
     $('#tripMeta').textContent = '새 여행을 만들어 시작해 보세요';
-    $('#peopleStrip').innerHTML = '';
     renderView();
     renderTabs();
   }
@@ -667,10 +710,18 @@
     });
   }
 
-  // ── 시트: 여행 설정 ──────────────────────────────────────
-  function openSettingsSheet() {
+  // ── 설정 탭 ──────────────────────────────────────────────
+  function lastSyncLabel() {
+    if (!state.lastSync) return '—';
+    try {
+      return new Date(state.lastSync).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
+    } catch { return '—'; }
+  }
+
+  function renderSettings() {
     const t = state.trip;
     const shareUrl = `${location.origin}/t/${t.code}`;
+    const currencies = [...new Set([...state.meta.currencies, t.localCurrency])];
     const rows = t.participants.map((p) => `
       <button class="list-row" data-act="edit-participant" data-id="${p.id}">
         ${avatar(p.name, p.id)}
@@ -681,41 +732,87 @@
         <span class="end">수정 ›</span>
       </button>`).join('');
 
-    openSheet('여행 설정', `
-      <div class="field"><label>여행 이름</label>
-        <input class="input" id="stName" value="${esc(t.name)}" maxlength="60" /></div>
-      <div class="field"><label>한 줄 메모</label>
-        <input class="input" id="stSub" value="${esc(t.subtitle || '')}" maxlength="120" placeholder="예: 두 가족 첫 유럽 여행" /></div>
-      <div class="input-row">
-        <div class="field" style="flex:1"><label>시작일</label><input class="input" id="stStart" type="date" value="${t.startDate}" /></div>
-        <div class="field" style="flex:1"><label>종료일</label><input class="input" id="stEnd" type="date" value="${t.endDate}" /></div>
+    return `
+      <div class="settings-block fade-in">
+        <div class="section-title"><h3>여행 정보</h3><span class="hint">저장하면 함께 보는 사람에게도 반영</span></div>
+        <section class="card card-pad">
+          <div class="form-grid">
+            <div class="field"><label for="stName">여행 이름</label>
+              <input class="input" id="stName" value="${esc(t.name)}" maxlength="60" /></div>
+            <div class="field"><label for="stSub">한 줄 메모</label>
+              <input class="input" id="stSub" value="${esc(t.subtitle || '')}" maxlength="120" placeholder="예: 두 가족 첫 유럽 여행" /></div>
+            <div class="input-row">
+              <div class="field" style="flex:1"><label for="stStart">시작일</label><input class="input" id="stStart" type="date" value="${t.startDate}" /></div>
+              <div class="field" style="flex:1"><label for="stEnd">종료일</label><input class="input" id="stEnd" type="date" value="${t.endDate}" /></div>
+            </div>
+            <div class="input-row">
+              <div class="field" style="flex:1"><label for="stCur">현지 통화</label>
+                <select class="input" id="stCur">
+                  ${currencies.map((c) => `<option value="${c}" ${c === t.localCurrency ? 'selected' : ''}>${c}</option>`).join('')}
+                </select></div>
+              <div class="field" style="flex:1"><label id="stRateLabel" for="stRate">환율 (1 ${esc(t.localCurrency)} = ?원)</label>
+                <input class="input" id="stRate" inputmode="decimal" value="${t.exchangeRate}" /></div>
+            </div>
+            <div class="note">환율을 바꾸면 현지 통화 지출이 모두 새 환율로 다시 계산돼요.</div>
+            <button class="btn primary" data-act="save-settings">여행 정보 저장</button>
+          </div>
+        </section>
       </div>
-      <div class="input-row">
-        <div class="field" style="flex:1"><label>현지 통화</label>
-          <select class="input" id="stCur">
-            ${[...new Set([...state.meta.currencies, t.localCurrency])].map((c) => `<option value="${c}" ${c === t.localCurrency ? 'selected' : ''}>${c}</option>`).join('')}
-          </select></div>
-        <div class="field" style="flex:1"><label>환율 (1 ${t.localCurrency} = ?원)</label>
-          <input class="input" id="stRate" inputmode="decimal" value="${t.exchangeRate}" /></div>
+
+      <div class="settings-block">
+        <div class="section-title"><h3>참여자</h3><span class="hint">${t.participants.length}팀 · ${totalHeads()}명</span></div>
+        <section class="card list">${rows}</section>
+        <button class="btn soft" data-act="new-participant">＋ 참여자 추가</button>
       </div>
-      <div class="note">환율을 바꾸면 현지 통화 지출이 모두 새 환율로 다시 계산돼요.</div>
-      <button class="btn primary" data-act="save-settings">여행 정보 저장</button>
 
-      <div class="section-title" style="margin-top:6px"><h3>참여자</h3><span class="hint">${t.participants.length}팀 · ${totalHeads()}명</span></div>
-      <section class="card list">${rows}</section>
-      <button class="btn" data-act="new-participant">＋ 참여자 추가</button>
-
-      <div class="field-label" style="margin-top:4px">함께 쓰는 링크</div>
-      <div class="share-box">
-        <span class="code-badge">${esc(t.code)}</span>
-        <span class="url">${esc(shareUrl)}</span>
-        <button class="btn small primary" data-act="copy-link">복사</button>
+      <div class="settings-block">
+        <div class="section-title"><h3>함께 쓰는 링크</h3><span class="hint">로그인 없이 공유</span></div>
+        <section class="card card-pad" style="display:flex;flex-direction:column;gap:9px">
+          <div class="share-box">
+            <span class="code-badge">${esc(t.code)}</span>
+            <span class="url">${esc(shareUrl)}</span>
+            <button class="btn small primary" data-act="copy-link">복사</button>
+          </div>
+          <div class="note">링크를 받은 사람은 로그인 없이 같은 보드를 보고 고칠 수 있어요. 필요한 사람에게만 보내 주세요.</div>
+        </section>
       </div>
-      <div class="note">링크를 받은 사람은 로그인 없이 바로 같은 보드를 볼 수 있어요. 링크를 아는 사람은 누구나 지출을 고칠 수 있으니 필요한 사람에게만 보내 주세요.</div>
-      <button class="btn danger" data-act="delete-trip" style="margin-top:6px">여행 삭제</button>
-    `);
 
-    $('#sheetBody [data-act="save-settings"]').addEventListener('click', async () => {
+      <div class="settings-block">
+        <div class="section-title"><h3>자동 동기화</h3><span class="hint">5초마다</span></div>
+        <section class="card card-pad" style="display:flex;flex-direction:column;gap:9px">
+          <div class="row-between">
+            <span class="sync" id="syncBadge"><span class="sync-dot"></span><span id="syncText">자동 동기화</span></span>
+            <span class="hint" style="font-size:11.5px;font-weight:700">마지막 ${lastSyncLabel()}</span>
+          </div>
+          <div class="note">한쪽 폰에서 지출·일정을 바꾸면 다른 폰에 5초 안에 반영돼요. 입력하던 화면은 방해하지 않아요.</div>
+        </section>
+      </div>
+
+      <div class="settings-block">
+        <div class="section-title"><h3>여행 관리</h3></div>
+        <section class="card list">
+          <button class="list-row" data-act="new-trip">
+            <div class="body"><div class="t">새 여행 만들기</div><div class="s">다음 여행을 따로 만들어요</div></div>
+            <span class="end">›</span>
+          </button>
+          <button class="list-row danger" data-act="delete-trip">
+            <div class="body"><div class="t">여행 삭제</div><div class="s">지출과 일정이 함께 사라져요</div></div>
+            <span class="end">›</span>
+          </button>
+        </section>
+      </div>`;
+  }
+
+  function bindSettings() {
+    const cur = $('#stCur');
+    if (cur) cur.addEventListener('change', () => {
+      const label = $('#stRateLabel');
+      if (label) label.textContent = `환율 (1 ${cur.value} = ?원)`;
+    });
+
+    const saveBtn = $('#view [data-act="save-settings"]');
+    if (saveBtn) saveBtn.addEventListener('click', async () => {
+      const t = state.trip;
       const body = {
         name: $('#stName').value.trim(),
         subtitle: $('#stSub').value.trim(),
@@ -724,17 +821,18 @@
         localCurrency: $('#stCur').value,
         exchangeRate: numOf($('#stRate').value),
       };
-      if (!body.name) { toast('여행 이름을 적어 주세요.', true); return; }
-      if (!(body.exchangeRate > 0)) { toast('환율을 0보다 크게 넣어 주세요.', true); return; }
+      if (!body.name) { toast('여행 이름을 적어 주세요.', true); $('#stName').focus(); return; }
+      if (!(body.exchangeRate > 0)) { toast('환율을 0보다 크게 넣어 주세요.', true); $('#stRate').focus(); return; }
       try {
         const trip = await api(`/trips/${t.id}`, { method: 'PATCH', body });
         applyTrip(trip);
         toast('여행 정보를 저장했어요');
-        openSettingsSheet();
       } catch (err) { toast(err.message, true); }
     });
 
-    $('#sheetBody [data-act="copy-link"]').addEventListener('click', async () => {
+    const copyBtn = $('#view [data-act="copy-link"]');
+    if (copyBtn) copyBtn.addEventListener('click', async () => {
+      const shareUrl = `${location.origin}/t/${state.trip.code}`;
       try {
         await navigator.clipboard.writeText(shareUrl);
         toast('공유 링크를 복사했어요');
@@ -747,26 +845,28 @@
         ta.remove();
       }
     });
+  }
 
-    $('#sheetBody [data-act="delete-trip"]').addEventListener('click', () => {
-      openConfirm({
-        title: '여행을 삭제할까요?',
-        message: `‘${t.name}’의 지출 ${t.expenses.length}건과 일정 ${t.itinerary.length}건이 함께 사라져요. 되돌릴 수 없어요.`,
-        confirmLabel: '삭제',
-        onConfirm: async () => {
-          await api(`/trips/${t.id}`, { method: 'DELETE' });
-          const list = (await api('/trips')).trips;
-          state.trips = list;
-          closeSheet();
-          if (list.length) {
-            applyTrip(await api(`/trips/${list[0].id}`));
-          } else {
-            resetToEmpty();
-            setTimeout(openNewTripSheet, 320);
-          }
-          toast('여행을 삭제했어요');
-        },
-      });
+  function confirmDeleteTrip() {
+    const t = state.trip;
+    if (!t) return;
+    openConfirm({
+      title: '여행을 삭제할까요?',
+      message: `‘${esc(t.name)}’의 지출 ${t.expenses.length}건과 일정 ${t.itinerary.length}건이 함께 사라져요. 되돌릴 수 없어요.`,
+      confirmLabel: '삭제',
+      onConfirm: async () => {
+        await api(`/trips/${t.id}`, { method: 'DELETE' });
+        const list = (await api('/trips')).trips;
+        state.trips = list;
+        closeSheet();
+        if (list.length) {
+          applyTrip(await api(`/trips/${list[0].id}`));
+        } else {
+          resetToEmpty();
+          setTimeout(openNewTripSheet, 320);
+        }
+        toast('여행을 삭제했어요');
+      },
     });
   }
 
@@ -1182,24 +1282,42 @@
     window.addEventListener('offline', () => setSync('off'));
   }
 
+  async function refreshNow() {
+    const btn = $('#btnRefresh');
+    if (!state.trip) { window.location.reload(); return; }
+    btn.classList.add('is-spinning');
+    try {
+      applyTrip(await api(`/trips/${state.trip.id}`));
+      toast('최신 상태로 불러왔어요');
+    } catch (err) {
+      toast(err.message, true);
+    } finally {
+      setTimeout(() => btn.classList.remove('is-spinning'), 520);
+    }
+  }
+
   // ── 이벤트 ───────────────────────────────────────────────
   function bindGlobal() {
     document.addEventListener('click', (e) => {
       const act = e.target.closest('[data-act]');
       if (act && act.dataset.act === 'close-sheet') { closeSheet(); return; }
 
-      const tab = e.target.closest('#tabs .tab');
+      const tab = e.target.closest('#tabbar .tab');
       if (tab) {
-        state.tab = tab.dataset.tab;
-        renderTabs();
-        renderView();
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        if (state.tab !== tab.dataset.tab) {
+          state.tab = tab.dataset.tab;
+          window.scrollTo({ top: 0 });
+          renderView();
+        }
         return;
       }
 
       if (!act) return;
       const { act: a, id } = act.dataset;
       switch (a) {
+        case 'add-expense': if (!state.trip) openNewTripSheet(); else openExpenseSheet({}); break;
+        case 'add-plan': if (!state.trip) openNewTripSheet(); else openItinerarySheet({ preset: { day: 1 } }); break;
+        case 'delete-trip': confirmDeleteTrip(); break;
         case 'edit-expense': openExpenseSheet({ expenseId: id }); break;
         case 'edit-itinerary': openItinerarySheet({ itemId: id }); break;
         case 'itn-to-expense': {
@@ -1224,12 +1342,7 @@
     });
 
     $('#btnTripSwitch').addEventListener('click', openTripSheet);
-    $('#btnSettings').addEventListener('click', () => { if (state.trip) openSettingsSheet(); });
-    $('#btnAdd').addEventListener('click', () => {
-      if (!state.trip) { openNewTripSheet(); return; }
-      if (state.tab === 'settle') openExpenseSheet({});
-      else openItinerarySheet({ preset: { day: 1 } });
-    });
+    $('#btnRefresh').addEventListener('click', refreshNow);
 
     document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && state.sheetOpen) closeSheet(); });
   }

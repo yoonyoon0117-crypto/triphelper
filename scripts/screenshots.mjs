@@ -3,6 +3,7 @@
  * 실제 모바일 화면(390×844) 스크린샷 생성 — 산출물용.
  *   npm run screenshots
  * 저장: /workspace/downloads/family-trip-screens/*.png
+ *       + family-trip-app/docs/screenshots/*.png (README용 영문 이름)
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -16,6 +17,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 const WORKSPACE = path.resolve(ROOT, '..');
 const OUT = process.env.SHOT_DIR ? path.resolve(process.env.SHOT_DIR) : path.join(WORKSPACE, 'downloads', 'family-trip-screens');
+const DOCS = path.join(ROOT, 'docs', 'screenshots');
 
 const BROWSERS = path.join(WORKSPACE, '.tools', 'pw-browsers');
 if (!process.env.PLAYWRIGHT_BROWSERS_PATH && fs.existsSync(BROWSERS)) process.env.PLAYWRIGHT_BROWSERS_PATH = BROWSERS;
@@ -24,6 +26,15 @@ if (fs.existsSync(LIBS)) process.env.LD_LIBRARY_PATH = [LIBS, process.env.LD_LIB
 const { chromium } = require('playwright');
 
 fs.mkdirSync(OUT, { recursive: true });
+fs.mkdirSync(DOCS, { recursive: true });
+
+// README에 쓰는 영문 이름 (같은 화면을 docs/screenshots 에도 저장)
+const ALIAS = {
+  '01-정산.png': '01-settle.png',
+  '03-일정.png': '03-plan.png',
+  '05-설정.png': '05-settings.png',
+  '11-친구5명-정산.png': '10-friends.png',
+};
 
 const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'trip-shots-'));
 const port = 3600 + Math.floor(Math.random() * 300);
@@ -98,37 +109,44 @@ try {
   const shots = async (name) => {
     await sleep(500);
     await page.screenshot({ path: path.join(OUT, name) });
+    if (ALIAS[name]) await page.screenshot({ path: path.join(DOCS, ALIAS[name]) });
     console.log(`📸 ${name}`);
   };
 
   await page.goto(`${base}/t/${trip.code}`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.hero');
   await sleep(800);
-  await shots('01-정산-요약.png');
+  await shots('01-정산.png');
 
   await page.evaluate(() => window.scrollTo({ top: 620 }));
   await shots('02-정산-지출내역.png');
   await page.evaluate(() => window.scrollTo({ top: 0 }));
 
-  await page.click('#tabs .tab[data-tab="plan"]');
-  await sleep(500);
+  await page.click('#tabbar .tab[data-tab="plan"]');
+  await sleep(600);
   await shots('03-일정.png');
   await page.evaluate(() => window.scrollTo({ top: 420 }));
   await shots('04-일정-카드.png');
   await page.evaluate(() => window.scrollTo({ top: 0 }));
 
-  await page.click('#tabs .tab[data-tab="settle"]');
-  await page.click('#btnSettings');
+  await page.click('#tabbar .tab[data-tab="settings"]');
   await page.waitForSelector('#stName');
-  await shots('05-여행-설정.png');
-  await page.evaluate(() => { document.querySelector('#sheetBody').scrollTop = 520; });
-  await shots('06-참여자-설정.png');
-  await page.click('.card.list .list-row >> nth=0');
+  await sleep(400);
+  await shots('05-설정.png');
+  await page.evaluate(() => window.scrollTo({ top: 560 }));
+  await shots('06-설정-참여자.png');
+  await page.evaluate(() => window.scrollTo({ top: 980 }));
+  await shots('07-설정-링크-동기화.png');
+  await page.evaluate(() => window.scrollTo({ top: 560 }));
+  await page.click('#view [data-act="edit-participant"] >> nth=0');
   await page.waitForSelector('#ptName');
-  await shots('07-참여자-수정.png');
+  await shots('08-참여자-수정.png');
   await page.click('.sheet-close');
   await sleep(400);
 
+  await page.click('#tabbar .tab[data-tab="settle"]');
+  await sleep(400);
+  await page.evaluate(() => window.scrollTo({ top: 0 }));
   await page.click('#btnAdd');
   await page.waitForSelector('#exTitle');
   await page.fill('#exTitle', '바르셀로나 택시');
@@ -136,9 +154,9 @@ try {
   await page.click('#exPayers .chip >> nth=1');
   await page.click('.radio[data-mode="select"]');
   await page.waitForTimeout(300);
-  await shots('08-지출-추가.png');
+  await shots('09-지출-추가.png');
   await page.evaluate(() => { document.querySelector('#sheetBody').scrollTop = 420; });
-  await shots('09-분담-방식.png');
+  await shots('10-분담-방식.png');
   await page.click('.sheet-close');
   await sleep(400);
 
@@ -160,16 +178,16 @@ try {
   await page.goto(`${base}/t/${friends.code}`, { waitUntil: 'networkidle' });
   await page.waitForSelector('.hero');
   await sleep(700);
-  await shots('10-친구5명-정산.png');
+  await shots('11-친구5명-정산.png');
 
   await page.click('#btnTripSwitch');
   await page.waitForSelector('[data-act="new-trip"]');
-  await shots('11-여행-전환.png');
+  await shots('12-여행-전환.png');
   await page.click('[data-act="new-trip"]');
   await page.waitForSelector('#ntName');
   await page.click('#ntTemplate button[data-tpl="friends"]');
   await sleep(300);
-  await shots('12-새-여행.png');
+  await shots('13-새-여행.png');
 
   console.log(`\n✅ 스크린샷 저장: ${OUT}`);
 } finally {
