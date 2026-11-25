@@ -441,7 +441,10 @@
     const sameTrip = state.trip && state.trip.id === trip.id;
     state.trip = trip;
     state.version = trip.version;
-    state.lastSync = new Date();
+    // 저장해 둔 내용으로 그렸다면 ‘마지막’은 지금이 아니라 그 저장 시각이다
+    state.lastSync = fromCache
+      ? new Date((cacheRead() && cacheRead().savedAt) || Date.now())
+      : new Date();
     if (!fromCache) {
       localStorage.setItem(LS_LAST, trip.code);
       cacheSaveTrip(trip); // 온라인에서 받은 최신 내용을 폰에도 저장
@@ -1501,7 +1504,9 @@
             </span>
             <span class="switch" aria-hidden="true"></span>
           </button>
-          <div class="note">한쪽 폰에서 지출·일정을 바꾸면 다른 폰에 5초 안에 반영돼요. 입력하던 화면은 방해하지 않아요.</div>
+          <div class="note" id="autoSyncNote">${state.dataSaver
+            ? '지금은 수동 동기화예요. 오른쪽 위 ↻를 누르거나 지출·일정을 직접 저장할 때만 최신 내용을 받아 와요.'
+            : '한쪽 폰에서 지출·일정을 바꾸면 다른 폰에 5초 안에 반영돼요. 입력하던 화면은 방해하지 않아요.'}</div>
           <div class="note">인터넷이 없을 때도 마지막으로 저장한 내용을 볼 수 있어요. 여행을 삭제하면 폰에 저장된 그 여행도 함께 지워지고, 입장 비밀번호를 바꾸면 폰 저장 내용도 지워져요.</div>
         </section>
       </div>
@@ -2135,6 +2140,10 @@
     }
     const hint = $('#autoSyncHint');
     if (hint) hint.textContent = state.dataSaver ? '수동' : '5초마다';
+    const note = $('#autoSyncNote');
+    if (note) note.textContent = state.dataSaver
+      ? '지금은 수동 동기화예요. 오른쪽 위 ↻를 누르거나 지출·일정을 직접 저장할 때만 최신 내용을 받아 와요.'
+      : '한쪽 폰에서 지출·일정을 바꾸면 다른 폰에 5초 안에 반영돼요. 입력하던 화면은 방해하지 않아요.';
   }
 
   function setDataSaver(on) {
