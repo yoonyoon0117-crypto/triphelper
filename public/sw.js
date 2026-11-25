@@ -1,10 +1,11 @@
 /* Trip helper✈️ 서비스워커 — 네트워크 우선, 실패하면 캐시 */
-const CACHE = 'trip-helper-v13';
+const CACHE = 'trip-helper-v14';
 const ASSETS = [
   '/',
   '/index.html',
   '/styles.css',
   '/app.js',
+  '/itinerary-parser.js',
   '/manifest.webmanifest',
   '/icons/icon-192.png',
   '/icons/icon-512.png',

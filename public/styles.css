@@ -548,6 +548,66 @@ a { color: var(--sky-d); }
 .form-grid { display: flex; flex-direction: column; gap: 11px; }
 .st-rate-btn { align-self: flex-start; }
 
+/* ── 설정: 일정 한 번에 붙여넣기 ─────────────── */
+.bulk-card { display: flex; flex-direction: column; gap: 10px; }
+.bulk-textarea {
+  min-height: 136px; resize: vertical;
+  font-size: 13px; line-height: 1.6; font-weight: 400;
+  white-space: pre-wrap; word-break: break-word;
+  background: #fcfdff;
+}
+.bulk-preview-btn { align-self: flex-start; }
+.bulk-loading { font-size: 12px; font-weight: 400; color: var(--ink-3); padding: 6px 2px; }
+.bulk-summary {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  font-size: 12.5px; font-weight: 400; color: var(--ink-2);
+  padding: 2px 2px 0;
+}
+.bulk-summary b { font-weight: 600; color: var(--sky-d); }
+.bulk-sep { width: 1px; height: 11px; background: var(--line); }
+.bulk-list {
+  display: flex; flex-direction: column;
+  max-height: 320px; overflow-y: auto;
+  border: 1px solid var(--line-soft); border-radius: 14px;
+  background: #fbfdff;
+  box-shadow: inset 0 -10px 12px -10px rgba(20, 38, 52, 0.16), inset 0 10px 12px -10px rgba(20, 38, 52, 0.10);
+  -webkit-overflow-scrolling: touch;
+}
+.bulk-item {
+  display: flex; align-items: flex-start; gap: 9px;
+  padding: 9px 11px; border-top: 1px solid var(--line-soft);
+  transition: opacity 0.15s ease;
+}
+.bulk-item:first-child { border-top: 0; }
+.bulk-item.is-off { opacity: 0.45; }
+.bulk-check {
+  width: 17px; height: 17px; margin: 2px 0 0; flex: none;
+  accent-color: var(--sky);
+}
+.bulk-body { flex: 1; min-width: 0; display: block; }
+.bulk-top { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.bulk-day {
+  font-size: 10px; font-weight: 500; letter-spacing: -0.01em;
+  background: #eef4fd; color: #3a55b5; border: 1px solid #dbe6fb;
+  border-radius: 6px; padding: 1px 5px;
+}
+.bulk-time {
+  font-size: 10.5px; font-weight: 600; font-variant-numeric: tabular-nums;
+  background: var(--sky-soft); color: var(--sky-d); border-radius: 6px; padding: 1px 5px;
+}
+.bulk-place {
+  font-size: 12.5px; font-weight: 500; color: var(--ink);
+  letter-spacing: -0.02em;
+}
+.bulk-memo {
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 2px; font-size: 11px; font-weight: 400; color: var(--ink-3);
+  white-space: pre-wrap; word-break: break-word;
+}
+.bulk-hint { font-size: 11px; font-weight: 400; color: var(--ink-3); padding: 0 2px; }
+.bulk-modes { margin-top: 2px; }
+
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .sync {
   display: inline-flex; align-items: center; gap: 6px;

@@ -25,6 +25,7 @@ const {
 } = require('./lib/trips');
 const { createNaverRateClient, RateLookupError } = require('./lib/rates');
 const { PinGate, PinError } = require('./lib/pin');
+const { parseItinerary } = require('./lib/itinerary-parser');
 
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -386,6 +387,50 @@ function createApp(store, options = {}) {
   });
 
   // ── 일정 ─────────────────────────────────────────────────
+  // 일정 텍스트 붙여넣기 — 미리보기(파싱만)와 한 번에 등록(bulk).
+  // 파서는 브라우저와 같은 파일(lib/itinerary-parser.js)을 써서 결과가 같습니다.
+  app.post('/api/trips/:id/itinerary/parse', (req, res, next) => {
+    try {
+      const trip = requireTrip(req, res);
+      const text = String((req.body && req.body.text) || '').trim();
+      if (!text) throw new HttpError(400, '붙여넣은 일정이 비어 있어요.');
+      if (text.length > 20000) throw new HttpError(400, '일정은 한 번에 20,000자까지 붙여넣을 수 있어요.');
+      const parsed = parseItinerary(text, { startDate: trip.startDate, endDate: trip.endDate });
+      ok(res, { ok: true, items: parsed.items, stats: parsed.stats });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/api/trips/:id/itinerary/bulk', async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      const raw = Array.isArray(body.items) ? body.items : null;
+      if (!raw) throw new HttpError(400, '등록할 일정 목록이 필요해요.');
+      if (!raw.length) throw new HttpError(400, '등록할 일정이 없어요. 미리보기에서 반영할 일정을 골라 주세요.');
+      if (raw.length > 300) throw new HttpError(400, '일정은 한 번에 300개까지 등록할 수 있어요.');
+      const trip = await store.write((state) => {
+        const t = state.trips.find((x) => x.id === req.params.id) || state.trips.find((x) => x.code === String(req.params.id).toUpperCase());
+        if (!t) throw new HttpError(404, '여행을 찾을 수 없습니다.');
+        const ts = new Date().toISOString();
+        const items = raw.map((item, i) => {
+          try {
+            return { id: newId('itn'), ...itineraryInput(item, null), createdAt: ts, updatedAt: ts };
+          } catch (err) {
+            if (err instanceof HttpError) throw new HttpError(400, `${i + 1}번째 일정: ${err.message}`);
+            throw err;
+          }
+        });
+        t.itinerary = body.replaceExisting === true ? items : [...(t.itinerary || []), ...items];
+        stamp(t);
+        return t;
+      });
+      ok(res, { ...toClient(trip), added: raw.length, replaced: body.replaceExisting === true }, 201);
+    } catch (err) {
+      next(err);
+    }
+  });
+
   app.post('/api/trips/:id/itinerary', async (req, res, next) => {
     try {
       const trip = await store.write((state) => {
@@ -438,6 +483,13 @@ function createApp(store, options = {}) {
   });
 
   // ── 정적 파일 / 페이지 라우팅 ─────────────────────────────
+  // 일정 텍스트 파서 — 브라우저(오프라인 미리보기 포함)와 서버가 같은 파일을 쓴다.
+  app.get('/itinerary-parser.js', (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.type('application/javascript; charset=utf-8');
+    res.sendFile(path.join(__dirname, 'lib', 'itinerary-parser.js'));
+  });
+
   app.get(['/', '/t/:code'], (req, res) => {
     res.set('Cache-Control', 'no-cache');
     res.sendFile(path.join(PUBLIC_DIR, 'index.html'));

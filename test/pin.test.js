@@ -209,3 +209,25 @@ test('10. PIN 미설정 서버에서는 change 가 400 안내', async () => {
   const open = new PinGate({ dataDir: path.join(tmpRoot, 'open'), envPin: '' });
   await assert.rejects(open.change('0000', PIN_A), (err) => err.status === 400 && err.code === 'PIN_NOT_SET');
 });
+
+test('11. 일정 미리보기·한 번에 등록 API 도 PIN 없이는 막힌다', async () => {
+  gate.failures.clear();
+  const store = new JsonStore(path.join(tmpRoot, 'data'));
+  await store.load();
+  const trip = store.snapshot().trips[0];
+  const before = (trip.itinerary || []).length;
+
+  const text = 'Day 1 10:00 프라도 미술관';
+  assert.equal((await call(`/api/trips/${trip.id}/itinerary/parse`, { method: 'POST', body: { text } })).status, 401, '미리보기 401');
+  assert.equal((await call(`/api/trips/${trip.id}/itinerary/bulk`, { method: 'POST', body: { items: [{ day: 1, place: '몰래 등록' }] } })).status, 401, '벌크 등록 401');
+
+  const token = (await call('/api/pin/verify', { method: 'POST', body: { pin: PIN_B } })).data.token;
+  const parsed = await call(`/api/trips/${trip.id}/itinerary/parse`, { method: 'POST', body: { text }, token });
+  assert.equal(parsed.status, 200);
+  assert.equal(parsed.data.items[0].place, '프라도 미술관');
+
+  const bulk = await call(`/api/trips/${trip.id}/itinerary/bulk`, { method: 'POST', body: { items: parsed.data.items }, token });
+  assert.equal(bulk.status, 201);
+  assert.equal(bulk.data.added, 1);
+  assert.equal(bulk.data.itinerary.length, before + 1);
+});

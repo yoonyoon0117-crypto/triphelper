@@ -538,6 +538,113 @@ async function run() {
   assert.equal(await page.$$eval('#view .day-today', (els) => els.length), 0, '여행 전에는 오늘 배지 없음');
   assert.match(await page.textContent('#view'), /마드리드 바라하스 공항/, '지난 일정도 그대로 표시(시작 전)');
 
+  // ── 5-3. 설정 탭 — 일정 한 번에 붙여넣기 ─────────────────────
+  step('5-3. 설정 탭 — 일정 붙여넣기 → 미리보기 → 체크 해제 → 반영 → 일정 탭 확인');
+  const itnBefore = (await api(`/api/trips/${tripBefore.id}`)).data.itinerary.length;
+  await page.click('#tabbar .tab[data-tab="settings"]');
+  await page.waitForSelector('#bulkText');
+  assert.match(await page.textContent('#view'), /일정 한 번에 붙여넣기/);
+  assert.match(await page.getAttribute('#bulkText', 'placeholder'), /12\/27\(일\)/, '예시 형식이 placeholder 로');
+  assert.match(await page.textContent('.bulk-preview-btn'), /일정 미리보기/);
+  await page.locator('#bulkText').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(200);
+  await shot(page, '20b-settings-bulk-empty.png');
+
+  const PASTE = [
+    'ㅁ 12/20(일) 마드리드 -> 바르셀로나 이동',
+    '  09:00 호텔 조식',
+    '  10:00~12:00 구엘 공원 관광',
+    '    - 사전 예약 필요',
+    '  19:00 저녁식사 @La Boqueria (예약)',
+    'ㅁ 12/21(월) 몬세라트',
+    '  08:30 렌트카 수령',
+    '  10:30 몬세라트 수도원 도착',
+  ].join('\n');
+  await page.fill('#bulkText', PASTE);
+  await page.click('[data-act="bulk-preview"]');
+  await page.waitForSelector('#bulkPreview .bulk-item');
+  await page.waitForTimeout(300);
+
+  const summary = (await page.textContent('.bulk-summary')).replace(/\s+/g, ' ').trim();
+  assert.match(summary, /총 7개 일정/, `미리보기 요약: ${summary}`);
+  assert.match(summary, /Day 2~3/, `일차 범위: ${summary}`);
+  assert.match(summary, /7개 선택/);
+  const bulkRows = await page.$$eval('#bulkPreview .bulk-item', (els) => els.map((e) => {
+    const day = e.querySelector('.bulk-day');
+    const time = e.querySelector('.bulk-time');
+    const place = e.querySelector('.bulk-place');
+    return {
+      day: day ? day.textContent.trim() : '',
+      time: time ? time.textContent.trim() : '',
+      place: place ? place.textContent.trim() : '',
+      checked: e.querySelector('.bulk-check').checked,
+    };
+  }));
+  assert.equal(bulkRows.length, 7, `미리보기 줄 수: ${bulkRows.length}`);
+  assert.deepEqual(bulkRows[1], { day: 'Day 2', time: '09:00', place: '호텔 조식', checked: true });
+  assert.deepEqual(bulkRows[2], { day: 'Day 2', time: '10:00', place: '구엘 공원 관광', checked: true });
+  assert.deepEqual(bulkRows[5], { day: 'Day 3', time: '08:30', place: '렌트카 수령', checked: true });
+  assert.match(await page.textContent('#bulkPreview'), /사전 예약 필요/, '하위 불릿은 메모로');
+  assert.match(await page.textContent('#bulkPreview'), /바르셀로나로 이동|마드리드 → 바르셀로나/, '이동 표기 보존');
+  await shot(page, '20c-settings-bulk-preview.png');
+
+  // 체크를 풀면 반영에서 빠진다
+  await page.locator('#bulkPreview .bulk-check').first().uncheck();
+  await page.waitForTimeout(150);
+  assert.match(await page.textContent('#bulkPickCount'), /6개 선택/);
+  assert.match(await page.getAttribute('#bulkPreview .bulk-item', 'class'), /is-off/);
+
+  // 기존 일정 뒤에 추가 (기본) → 일정 탭으로 이동
+  assert.match(await page.textContent('[data-act="bulk-mode"][data-mode="append"]'), /기존 일정 뒤에 추가/);
+  assert.match(await page.textContent('[data-act="bulk-mode"][data-mode="replace"]'), /기존 일정 지우고 새로 채우기/);
+  await page.click('[data-act="bulk-apply"]');
+  await page.waitForFunction(() => document.querySelector('#tabbar .tab[data-tab="plan"]').classList.contains('is-active'), null, { timeout: 12000 });
+  await page.waitForTimeout(700);
+  assert.match(await page.textContent('#toast'), /일정 6개를 등록했어요/, '완료 토스트');
+  const planAfterBulk = await page.textContent('#view');
+  assert.match(planAfterBulk, /구엘 공원 관광/);
+  assert.match(planAfterBulk, /La Boqueria/);
+  assert.match(planAfterBulk, /몬세라트 수도원 도착/);
+  assert.match(planAfterBulk, /Day 3/);
+  assert.doesNotMatch(planAfterBulk, /마드리드 → 바르셀로나 이동/, '체크 해제한 줄은 등록되지 않는다');
+  await shot(page, '20d-plan-after-bulk.png');
+
+  const itnAfter = (await api(`/api/trips/${tripBefore.id}`)).data;
+  assert.equal(itnAfter.itinerary.length, itnBefore + 6, '선택한 6개만 등록');
+  const guell = itnAfter.itinerary.find((i) => i.place === '구엘 공원 관광');
+  assert.equal(guell.day, 2);
+  assert.equal(guell.time, '10:00');
+  assert.match(guell.memo, /사전 예약 필요/);
+  const boqueria = itnAfter.itinerary.find((i) => i.place === 'La Boqueria');
+  assert.equal(boqueria.time, '19:00');
+  assert.match(boqueria.memo, /저녁식사/);
+  assert.ok(!itnAfter.itinerary.some((i) => i.place.includes('바르셀로나 이동')), '해제한 일차 제목은 저장 안 됨');
+
+  // 설정 탭으로 돌아가면 초안이 비어 있다 (반영 후 초기화)
+  await page.click('#tabbar .tab[data-tab="settings"]');
+  await page.waitForSelector('#bulkText');
+  assert.equal(await page.inputValue('#bulkText'), '');
+  assert.ok(!(await page.$('#bulkPreview .bulk-item')), '반영 뒤 미리보기는 비워진다');
+
+  // '기존 일정 지우고 새로 채우기'는 되돌릴 수 없어 확인 시트를 한 번 거친다
+  await page.fill('#bulkText', 'Day 1 10:00 실수로 지우기');
+  await page.click('[data-act="bulk-preview"]');
+  await page.waitForSelector('#bulkPreview .bulk-item');
+  await page.click('[data-act="bulk-mode"][data-mode="replace"]');
+  await page.waitForTimeout(150);
+  await page.click('[data-act="bulk-apply"]');
+  await page.waitForSelector('#sheetBody [data-act="confirm-yes"]');
+  assert.match(await page.textContent('#sheetTitle'), /기존 일정을 지울까요/);
+  assert.match(await page.textContent('#sheetBody'), /지우고/);
+  await shot(page, '20e-bulk-replace-confirm.png');
+  await page.click('#sheetBody [data-act="close-sheet"]');
+  await page.waitForTimeout(400);
+  assert.equal((await api(`/api/trips/${tripBefore.id}`)).data.itinerary.length, itnBefore + 6, '확인을 취소하면 그대로');
+  await page.click('[data-act="bulk-mode"][data-mode="append"]');
+
+  await page.click('#tabbar .tab[data-tab="plan"]');
+  await page.waitForTimeout(300);
+
   // ── 6. 친구 5명 여행 ─────────────────────────
   step('6. 친구 5명 새 여행 → 5명 균등 + 3명 부분 분담 정산');
   await page.click('#btnTripSwitch');
@@ -691,7 +798,7 @@ async function run() {
     return null;
   });
   assert.ok(precachedFonts, '폰트 프리캐시 없음 (오프라인 로드 불가)');
-  assert.equal(precachedFonts.cache, 'trip-helper-v13', `캐시 버전: ${precachedFonts.cache}`);
+  assert.equal(precachedFonts.cache, 'trip-helper-v14', `캐시 버전: ${precachedFonts.cache}`);
   console.log(`   프리캐시: ${precachedFonts.cache} → ${precachedFonts.paths.join(', ')}`);
   const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
   assert.match(viewport, /viewport-fit=cover/);
@@ -781,6 +888,21 @@ async function run() {
   assert.equal(await offPage.inputValue('#exTitle'), '오프라인 테스트');
   await offPage.click('.sheet-close');
   await offPage.waitForTimeout(400);
+
+  // 일정 붙여넣기 — 오프라인에서도 파서가 브라우저에서 돌아 미리보기는 되고, 반영은 친절한 안내
+  await offPage.click('#tabbar .tab[data-tab="settings"]');
+  await offPage.waitForSelector('#bulkText');
+  await offPage.fill('#bulkText', 'Day 1 10:00 오프라인 미술관');
+  await offPage.click('[data-act="bulk-preview"]');
+  await offPage.waitForSelector('#bulkPreview .bulk-item');
+  assert.match(await offPage.textContent('.bulk-summary'), /총 1개 일정/, '오프라인에서도 로컬 파서로 미리보기');
+  assert.match(await offPage.textContent('#bulkPreview'), /오프라인 미술관/);
+  await offPage.click('[data-act="bulk-apply"]');
+  await offPage.waitForTimeout(700);
+  assert.match(await offPage.textContent('#toast'), /오프라인 상태예요\. 인터넷이 연결되면 일정을 등록할 수 있어요/);
+  assert.match(await offPage.textContent('#bulkPickCount'), /1개 선택/, '실패해도 미리보기·선택은 유지');
+  await offPage.click('#tabbar .tab[data-tab="settle"]');
+  await offPage.waitForTimeout(300);
 
   // (3) 다시 온라인 → 배지 해제 + 서버 내용으로 자동 동기화
   await offCtx.setOffline(false);

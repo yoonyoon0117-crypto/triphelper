@@ -35,6 +35,7 @@ const ALIAS = {
   '03-일정.png': '03-plan.png',
   '03b-환율-계산기.png': '04-rate.png',
   '05-설정.png': '05-settings.png',
+  '05b-설정-일정-붙여넣기.png': '06-settings-paste.png',
   '11-친구5명-정산.png': '10-friends.png',
 };
 
@@ -167,6 +168,29 @@ try {
   await page.waitForSelector('#stName');
   await sleep(400);
   await shots('05-설정.png');
+
+  // 일정 한 번에 붙여넣기 — 실제 스페인 일정 원문 형식으로 미리보기까지
+  const PASTE_SAMPLE = [
+    'ㅁ 12/21(일) 마드리드 : 톨레도 근교여행',
+    '  09:15 -> 09:49 마드리드 -> 톨레도',
+    '  10:00~12:00 구시가지 관광',
+    '    - 소코도베르 광장으로 이동',
+    '    - 꼬마기차 한바퀴 (약 50분, 전망대 10분)',
+    '  12:00~13:00 점심식사',
+    '  19:00 저녁식사 @Restaurante Sol (salon자리, 예약함)',
+  ].join('\n');
+  await page.evaluate(() => window.scrollTo({ top: 430 }));
+  await page.fill('#bulkText', PASTE_SAMPLE);
+  await page.click('[data-act="bulk-preview"]');
+  await page.waitForSelector('#bulkPreview .bulk-item');
+  await page.evaluate(() => { const el = document.querySelector('.bulk-list'); if (el) el.scrollTop = 0; });
+  await page.evaluate(() => { const el = document.querySelector('#bulkText'); if (el) el.scrollTop = 0; });
+  await shots('05b-설정-일정-붙여넣기.png');
+  // 붙여넣기 초안을 비우고 아래 설정 카드들을 원래 높이로 촬영하기 위해 다시 연다
+  await page.goto(`${base}/t/${trip.code}`, { waitUntil: 'networkidle' });
+  await page.click('#tabbar .tab[data-tab="settings"]');
+  await page.waitForSelector('#stName');
+  await sleep(300);
   await page.evaluate(() => window.scrollTo({ top: 560 }));
   await shots('06-설정-참여자.png');
   await page.evaluate(() => window.scrollTo({ top: 980 }));

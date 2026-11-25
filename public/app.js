@@ -1205,6 +1205,176 @@
     } catch { return '—'; }
   }
 
+  // ── 설정: 일정 한 번에 붙여넣기 ───────────────────────────
+  // 붙여넣은 메모·카톡 일정을 일차·시간·장소·메모로 나눠 미리 보여 주고,
+  // 고른 항목만 한 번에 등록한다. 파싱은 브라우저(/itinerary-parser.js)에서 하므로 오프라인에서도 미리보기가 된다.
+  const bulkDraft = { text: '', parsed: null, selected: null, mode: 'append', busy: false };
+
+  const BULK_PLACEHOLDER = [
+    '12/27(일) 마드리드 : 톨레도 근교여행',
+    '09:15 -> 09:49 마드리드 -> 톨레도',
+    '10:00~12:00 구시가지 관광',
+    '  - 소코도베르 광장으로 이동',
+    '19:00 저녁식사 @Restaurante Sol (예약)',
+  ].join('\n');
+
+  function bulkDaysLabel() {
+    const stats = (bulkDraft.parsed && bulkDraft.parsed.stats) || {};
+    const days = Array.isArray(stats.days) ? stats.days : [];
+    if (!days.length) return '';
+    return days.length === 1 ? `Day ${days[0]}` : `Day ${days[0]}~${days[days.length - 1]}`;
+  }
+
+  function bulkPreviewHtml() {
+    const parsed = bulkDraft.parsed;
+    if (!parsed) return '';
+    const items = parsed.items || [];
+    const selected = bulkDraft.selected instanceof Set ? bulkDraft.selected : new Set();
+    if (!items.length) {
+      return '<div class="note warn">일정을 찾지 못했어요. 12/27 · Day 1 · 1일차 같은 날짜나 10:00 장소처럼 시간이 들어간 줄을 넣어 보세요.</div>';
+    }
+    const rows = items.map((it, i) => `
+      <label class="bulk-item${selected.has(i) ? '' : ' is-off'}">
+        <input type="checkbox" class="bulk-check" data-idx="${i}"${selected.has(i) ? ' checked' : ''} />
+        <span class="bulk-body">
+          <span class="bulk-top">
+            <span class="bulk-day">Day ${it.day}</span>
+            <span class="bulk-time">${it.time ? esc(it.time) : '시간 미정'}</span>
+            <span class="bulk-place">${esc(it.place)}</span>
+          </span>
+          ${it.memo ? `<span class="bulk-memo">${esc(it.memo)}</span>` : ''}
+        </span>
+      </label>`).join('');
+    const noteLines = (parsed.stats && parsed.stats.noteLines) || 0;
+    const skipped = noteLines ? `<div class="bulk-hint">참고 메모로 본 ${noteLines}줄은 일정에 넣지 않았어요.</div>` : '';
+    const now = state.trip.itinerary.length;
+    return `
+      <div class="bulk-summary">
+        <b>총 ${items.length}개 일정</b>
+        <span class="bulk-sep"></span>
+        <span>${bulkDaysLabel()}</span>
+        <span class="bulk-sep"></span>
+        <span id="bulkPickCount">${selected.size}개 선택</span>
+      </div>
+      <div class="bulk-list">${rows}</div>
+      ${skipped}
+      <div class="radio-list bulk-modes">
+        <button class="radio ${bulkDraft.mode === 'append' ? 'is-on' : ''}" data-act="bulk-mode" data-mode="append">
+          <span class="dot"></span>
+          <span class="body"><span class="t">기존 일정 뒤에 추가</span><span class="s">지금 ${now}개 일정은 그대로 둬요</span></span>
+        </button>
+        <button class="radio ${bulkDraft.mode === 'replace' ? 'is-on' : ''}" data-act="bulk-mode" data-mode="replace">
+          <span class="dot"></span>
+          <span class="body"><span class="t">기존 일정 지우고 새로 채우기</span><span class="s">이 여행의 일정 ${now}개를 지우고 새로 넣어요</span></span>
+        </button>
+      </div>
+      <button class="btn primary" data-act="bulk-apply">일정에 반영하기</button>`;
+  }
+
+  function renderBulkPreview() {
+    const box = $('#bulkPreview');
+    if (box) box.innerHTML = bulkPreviewHtml();
+  }
+
+  function paintBulkCount() {
+    const el = $('#bulkPickCount');
+    if (el) el.textContent = `${bulkDraft.selected instanceof Set ? bulkDraft.selected.size : 0}개 선택`;
+  }
+
+  async function previewBulk() {
+    const t = state.trip;
+    if (!t) return;
+    const el = $('#bulkText');
+    const text = (el ? el.value : bulkDraft.text || '').trim();
+    if (!text) {
+      toast('먼저 일정을 붙여넣어 주세요.', true);
+      if (el) el.focus();
+      return;
+    }
+    bulkDraft.text = text;
+    const box = $('#bulkPreview');
+    if (box) box.innerHTML = '<div class="bulk-loading">일정을 정리하는 중…</div>';
+    let parsed = null;
+    try {
+      const parser = window.ItineraryParser;
+      if (parser && typeof parser.parseItinerary === 'function') {
+        parsed = parser.parseItinerary(text, { startDate: t.startDate, endDate: t.endDate });
+      } else {
+        // 예전 캐시로 파서 파일이 없을 때는 서버 파서를 쓴다 (결과는 같음)
+        parsed = await api(`/trips/${t.id}/itinerary/parse`, { method: 'POST', body: { text } });
+      }
+    } catch (err) {
+      if (box) box.innerHTML = '';
+      toast(err.offline ? '오프라인 상태예요. 인터넷이 연결되면 일정을 정리할 수 있어요.' : err.message, true);
+      return;
+    }
+    bulkDraft.parsed = parsed;
+    bulkDraft.selected = new Set(((parsed && parsed.items) || []).map((_, i) => i));
+    renderBulkPreview();
+    if (!bulkDraft.selected.size) toast('일정을 찾지 못했어요. 날짜·시간이 들어간 줄을 넣어 보세요.', true);
+  }
+
+  function setBulkMode(mode) {
+    bulkDraft.mode = mode === 'replace' ? 'replace' : 'append';
+    renderBulkPreview();
+  }
+
+  async function applyBulk() {
+    const t = state.trip;
+    const parsed = bulkDraft.parsed;
+    if (!t || !parsed) { toast('먼저 일정 미리보기를 눌러 주세요.', true); return; }
+    const selected = bulkDraft.selected instanceof Set ? bulkDraft.selected : new Set();
+    const items = (parsed.items || [])
+      .filter((_, i) => selected.has(i))
+      .map((it) => ({ day: it.day, time: it.time, place: it.place, region: it.region, memo: it.memo }));
+    if (!items.length) { toast('반영할 일정을 하나 이상 골라 주세요.', true); return; }
+    if (bulkDraft.busy) return;
+    // 기존 일정을 지우는 선택은 되돌릴 수 없으니 한 번 더 묻는다
+    if (bulkDraft.mode === 'replace' && t.itinerary.length) {
+      openConfirm({
+        title: '기존 일정을 지울까요?',
+        message: `지금 있는 일정 ${t.itinerary.length}개를 지우고, 고른 ${items.length}개로 새로 채워요. 되돌릴 수 없어요.`,
+        confirmLabel: '지우고 채우기',
+        onConfirm: async () => {
+          const done = await runBulkApply(items);
+          if (done) closeSheet();
+        },
+      });
+      return;
+    }
+    await runBulkApply(items);
+  }
+
+  async function runBulkApply(items) {
+    const t = state.trip;
+    if (!t || bulkDraft.busy) return false;
+    bulkDraft.busy = true;
+    const btn = $('#view [data-act="bulk-apply"]');
+    if (btn) { btn.disabled = true; btn.textContent = '반영하는 중…'; }
+    try {
+      const trip = await api(`/trips/${t.id}/itinerary/bulk`, {
+        method: 'POST',
+        body: { items, replaceExisting: bulkDraft.mode === 'replace' },
+      });
+      bulkDraft.text = '';
+      bulkDraft.parsed = null;
+      bulkDraft.selected = null;
+      bulkDraft.mode = 'append';
+      state.tab = 'plan';
+      applyTrip(trip);
+      window.scrollTo({ top: 0 });
+      toast(`일정 ${items.length}개를 등록했어요 🗺️`);
+      return true;
+    } catch (err) {
+      if (btn) { btn.disabled = false; btn.textContent = '일정에 반영하기'; }
+      if (err.offline) toast('오프라인 상태예요. 인터넷이 연결되면 일정을 등록할 수 있어요.', true);
+      else toast(err.message, true);
+      return false;
+    } finally {
+      bulkDraft.busy = false;
+    }
+  }
+
   function renderSettings() {
     const t = state.trip;
     const shareUrl = `${location.origin}/t/${t.code}`;
@@ -1244,6 +1414,19 @@
             <button class="btn small soft st-rate-btn" data-act="st-rate-fetch">네이버 환율 불러오기</button>
             <button class="btn primary" data-act="save-settings">여행 정보 저장</button>
           </div>
+        </section>
+      </div>
+
+      <div class="settings-block">
+        <div class="section-title"><h3>일정 한 번에 붙여넣기</h3><span class="hint">지금 ${t.itinerary.length}개 일정</span></div>
+        <section class="card card-pad bulk-card">
+          <div class="field">
+            <label for="bulkText">일정 텍스트</label>
+            <textarea class="input bulk-textarea" id="bulkText" rows="6" spellcheck="false" placeholder="${esc(BULK_PLACEHOLDER)}">${esc(bulkDraft.text)}</textarea>
+          </div>
+          <button class="btn soft bulk-preview-btn" data-act="bulk-preview">일정 미리보기</button>
+          <div id="bulkPreview">${bulkPreviewHtml()}</div>
+          <div class="note">메모·카톡에 적어 둔 그대로 붙여넣으면 일차·시간·장소로 나눠요. <b>12/27(일)</b>·<b>Day 1</b>·<b>1일차</b> 같은 표기를 알아보고, 들여쓴 줄·하위 불릿은 그 일정의 메모로 넣습니다.</div>
         </section>
       </div>
 
@@ -1308,8 +1491,7 @@
   }
 
   function bindSettings() {
-    const cur = $('#stCur');
-    if (cur) cur.addEventListener('change', () => {
+    const cur = $('#stCur');    if (cur) cur.addEventListener('change', () => {
       const label = $('#stRateLabel');
       if (label) label.textContent = `환율 (1 ${cur.value} = ?원)`;
     });
@@ -1394,6 +1576,25 @@
         stFetch.disabled = false;
       }
     });
+
+    // 일정 붙여넣기 — 입력한 글은 초안으로 기억해 두고(자동 동기화로 화면이 다시 그려져도 유지),
+    // 체크를 풀면 반영에서 빠집니다.
+    const bulkText = $('#bulkText');
+    if (bulkText) bulkText.addEventListener('input', () => { bulkDraft.text = bulkText.value; });
+    const bulkBox = $('#bulkPreview');
+    if (bulkBox) {
+      bulkBox.addEventListener('change', (e) => {
+        const box = e.target && e.target.closest ? e.target.closest('.bulk-check') : null;
+        if (!box) return;
+        const idx = Number(box.dataset.idx);
+        if (!(bulkDraft.selected instanceof Set)) bulkDraft.selected = new Set();
+        if (box.checked) bulkDraft.selected.add(idx);
+        else bulkDraft.selected.delete(idx);
+        const row = box.closest('.bulk-item');
+        if (row) row.classList.toggle('is-off', !box.checked);
+        paintBulkCount();
+      });
+    }
 
     const copyBtn = $('#view [data-act="copy-link"]');
     if (copyBtn) copyBtn.addEventListener('click', async () => {
@@ -1929,6 +2130,9 @@
           break;
         }
         case 'edit-participant': openParticipantSheet(id); break;
+        case 'bulk-preview': previewBulk(); break;
+        case 'bulk-mode': setBulkMode(act.dataset.mode); break;
+        case 'bulk-apply': applyBulk(); break;
         case 'new-participant': openParticipantSheet(null); break;
         case 'new-trip': openNewTripSheet(); break;
         case 'switch-trip': {

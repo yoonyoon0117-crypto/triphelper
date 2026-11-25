@@ -364,6 +364,67 @@ test('일정 CRUD + 구글지도 링크', async () => {
   assert.equal(del.data.itinerary.length, 0);
 });
 
+test('일정 텍스트 미리보기(/parse)와 한 번에 등록(/bulk)', async () => {
+  const trip = await newTrip({ name: '붙여넣기 테스트', startDate: '2026-12-26', endDate: '2027-01-02', template: 'twoFamilies' });
+  const text = [
+    'ㅁ 12/27(일) 마드리드 : 톨레도 근교여행',
+    '  09:15 -> 09:49 마드리드 -> 톨레도',
+    '  10:00~12:00 구시가지 관광',
+    '    - 소코도베르 광장으로 이동',
+    '  19:00 저녁식사 @Restaurante Sol (예약)',
+  ].join('\n');
+
+  const parsed = await call(`/api/trips/${trip.id}/itinerary/parse`, { method: 'POST', body: { text } });
+  assert.equal(parsed.status, 200);
+  assert.equal(parsed.data.ok, true);
+  assert.ok(parsed.data.items.length >= 3, `파싱된 일정 ${parsed.data.items.length}개`);
+  const train = parsed.data.items.find((i) => i.time === '09:15');
+  assert.equal(train.day, 2, '12/27 → 2일차');
+  assert.equal(train.place, '마드리드 → 톨레도');
+  const tour = parsed.data.items.find((i) => i.place === '구시가지 관광');
+  assert.equal(tour.time, '10:00');
+  assert.match(tour.memo, /소코도베르/);
+  assert.deepEqual(parsed.data.stats.days, [2]);
+
+  // 빈 본문은 400 안내
+  const empty = await call(`/api/trips/${trip.id}/itinerary/parse`, { method: 'POST', body: { text: '   ' } });
+  assert.equal(empty.status, 400);
+
+  // 기존 일정 뒤에 추가 (기본)
+  const bulk = await call(`/api/trips/${trip.id}/itinerary/bulk`, { method: 'POST', body: { items: parsed.data.items } });
+  assert.equal(bulk.status, 201);
+  assert.equal(bulk.data.added, parsed.data.items.length);
+  assert.equal(bulk.data.itinerary.length, parsed.data.items.length);
+  assert.ok(bulk.data.itinerary.every((i) => i.id && i.createdAt), 'id·시각이 붙어 저장된다');
+  assert.equal(bulk.data.itinerary[0].day, 2);
+
+  const again = await call(`/api/trips/${trip.id}/itinerary/bulk`, {
+    method: 'POST',
+    body: { items: [{ day: 1, time: '08:00', place: '아침 식사' }] },
+  });
+  assert.equal(again.data.itinerary.length, parsed.data.items.length + 1, '추가는 뒤에 붙는다');
+
+  // 기존 일정을 지우고 새로 채우기
+  const replaced = await call(`/api/trips/${trip.id}/itinerary/bulk`, {
+    method: 'POST',
+    body: { items: [{ day: 3, time: '', place: '새 일정', region: '', memo: '' }], replaceExisting: true },
+  });
+  assert.equal(replaced.status, 201);
+  assert.equal(replaced.data.replaced, true);
+  assert.equal(replaced.data.itinerary.length, 1, '기존 일정은 교체된다');
+  assert.equal(replaced.data.itinerary[0].place, '새 일정');
+  assert.equal(replaced.data.itinerary[0].time, '');
+
+  // 잘못된 항목은 몇 번째인지 알려 준다
+  const bad = await call(`/api/trips/${trip.id}/itinerary/bulk`, { method: 'POST', body: { items: [{ day: 1, place: 'x' }, { day: 1, place: '' }] } });
+  assert.equal(bad.status, 400);
+  assert.match(bad.data.error, /2번째 일정/);
+
+  assert.equal((await call(`/api/trips/${trip.id}/itinerary/bulk`, { method: 'POST', body: { items: [] } })).status, 400);
+  assert.equal((await call(`/api/trips/${trip.id}/itinerary/bulk`, { method: 'POST', body: {} })).status, 400);
+  assert.equal((await call('/api/trips/trp_none/itinerary/bulk', { method: 'POST', body: { items: [{ day: 1, place: 'x' }] } })).status, 404);
+});
+
 test('폴링: 버전이 같으면 unchanged, 바뀌면 전체 데이터', async () => {
   const trip = await newTrip({ name: '폴링 테스트', startDate: '2027-11-01', endDate: '2027-11-02', template: 'twoFamilies' });
   const same = await call(`/api/trips/${trip.id}/poll?version=${trip.version}`);
