@@ -473,7 +473,7 @@ async function run() {
     return null;
   });
   assert.ok(precachedFonts, '폰트 프리캐시 없음 (오프라인 로드 불가)');
-  assert.equal(precachedFonts.cache, 'trip-helper-v8', `캐시 버전: ${precachedFonts.cache}`);
+  assert.equal(precachedFonts.cache, 'trip-helper-v9', `캐시 버전: ${precachedFonts.cache}`);
   console.log(`   프리캐시: ${precachedFonts.cache} → ${precachedFonts.paths.join(', ')}`);
   const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
   assert.match(viewport, /viewport-fit=cover/);
