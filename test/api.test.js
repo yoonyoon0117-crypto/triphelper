@@ -343,7 +343,7 @@ test('일정 CRUD + 구글지도 링크', async () => {
   const trip = await newTrip({ name: '일정 테스트', startDate: '2027-10-01', endDate: '2027-10-03', template: 'twoFamilies' });
   const created = await call(`/api/trips/${trip.id}/itinerary`, {
     method: 'POST',
-    body: { day: 2, time: '09:30', place: '사그라다 파밀리아', region: '바르셀로나', memo: '예약 10:00', mapUrl: 'https://maps.app.goo.gl/example' },
+    body: { day: 2, time: '09:30', place: '동네 미술관', region: '도쿄', memo: '예약 10:00', mapUrl: 'https://maps.app.goo.gl/example' },
   });
   assert.equal(created.status, 201);
   const item = created.data.itinerary[0];
@@ -365,13 +365,13 @@ test('일정 CRUD + 구글지도 링크', async () => {
 });
 
 test('일정 텍스트 미리보기(/parse)와 한 번에 등록(/bulk)', async () => {
-  const trip = await newTrip({ name: '붙여넣기 테스트', startDate: '2026-12-26', endDate: '2027-01-02', template: 'twoFamilies' });
+  const trip = await newTrip({ name: '붙여넣기 테스트', startDate: '2027-05-01', endDate: '2027-05-08', template: 'twoFamilies' });
   const text = [
-    'ㅁ 12/27(일) 마드리드 : 톨레도 근교여행',
-    '  09:15 -> 09:49 마드리드 -> 톨레도',
-    '  10:00~12:00 구시가지 관광',
-    '    - 소코도베르 광장으로 이동',
-    '  19:00 저녁식사 @Restaurante Sol (예약)',
+    'ㅁ 5/2(일) 도쿄 : 하코네 근교여행',
+    '  09:15 -> 10:05 도쿄 -> 하코네',
+    '  10:30~12:00 호수 주변 산책',
+    '    - 전망 광장으로 이동',
+    '  19:00 저녁식사 @Kaze Shokudo (예약)',
   ].join('\n');
 
   const parsed = await call(`/api/trips/${trip.id}/itinerary/parse`, { method: 'POST', body: { text } });
@@ -379,11 +379,11 @@ test('일정 텍스트 미리보기(/parse)와 한 번에 등록(/bulk)', async 
   assert.equal(parsed.data.ok, true);
   assert.ok(parsed.data.items.length >= 3, `파싱된 일정 ${parsed.data.items.length}개`);
   const train = parsed.data.items.find((i) => i.time === '09:15');
-  assert.equal(train.day, 2, '12/27 → 2일차');
-  assert.equal(train.place, '마드리드 → 톨레도');
-  const tour = parsed.data.items.find((i) => i.place === '구시가지 관광');
-  assert.equal(tour.time, '10:00');
-  assert.match(tour.memo, /소코도베르/);
+  assert.equal(train.day, 2, '5/2 → 2일차');
+  assert.equal(train.place, '도쿄 → 하코네');
+  const tour = parsed.data.items.find((i) => i.place === '호수 주변 산책');
+  assert.equal(tour.time, '10:30');
+  assert.match(tour.memo, /전망 광장/);
   assert.deepEqual(parsed.data.stats.days, [2]);
 
   // 빈 본문은 400 안내

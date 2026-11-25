@@ -544,7 +544,7 @@ async function run() {
   await page.click('#tabbar .tab[data-tab="settings"]');
   await page.waitForSelector('#bulkText');
   assert.match(await page.textContent('#view'), /일정 한 번에 붙여넣기/);
-  assert.match(await page.getAttribute('#bulkText', 'placeholder'), /12\/27\(일\)/, '예시 형식이 placeholder 로');
+  assert.match(await page.getAttribute('#bulkText', 'placeholder'), /5\/2\(일\)/, '예시 형식이 placeholder 로');
   assert.match(await page.textContent('.bulk-preview-btn'), /일정 미리보기/);
   await page.locator('#bulkText').scrollIntoViewIfNeeded();
   await page.waitForTimeout(200);

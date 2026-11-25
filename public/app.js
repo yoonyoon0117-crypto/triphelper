@@ -1238,11 +1238,11 @@
   const bulkDraft = { text: '', parsed: null, selected: null, mode: 'append', busy: false };
 
   const BULK_PLACEHOLDER = [
-    '12/27(일) 마드리드 : 톨레도 근교여행',
-    '09:15 -> 09:49 마드리드 -> 톨레도',
-    '10:00~12:00 구시가지 관광',
-    '  - 소코도베르 광장으로 이동',
-    '19:00 저녁식사 @Restaurante Sol (예약)',
+    '5/2(일) 도쿄 : 하코네 근교여행',
+    '09:15 -> 10:05 도쿄 -> 하코네',
+    '10:30~12:00 호수 주변 산책',
+    '  - 전망 광장으로 이동',
+    '19:00 저녁식사 @Kaze Shokudo (예약)',
   ].join('\n');
 
   function bulkDaysLabel() {
