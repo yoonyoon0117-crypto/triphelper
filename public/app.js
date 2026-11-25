@@ -292,7 +292,7 @@
     const hero = `
       <section class="hero fade-in">
         <div class="hero-label">${s.transfers.length ? '정산할 금액' : '정산 상태'}</div>
-        <div class="hero-amount krw">${s.transfers.length ? won(transferSum) : '딱 맞았어요'}</div>
+        <div class="hero-amount krw">${s.transfers.length ? won(transferSum) : '딱 맞아요😆'}</div>
         <div class="hero-sub">${s.transfers.length
           ? (s.transfers.length === 1 ? '한 번만 보내면 정산 끝!' : `${s.transfers.length}번 송금하면 딱 맞아요`)
           : (s.totalKrw ? '서로 보낼 돈이 없어요 🎉' : '첫 지출을 기록해 보세요')}</div>
@@ -784,7 +784,7 @@
         <section class="card card-pad" style="display:flex;flex-direction:column;gap:9px">
           <div class="row-between">
             <span class="sync" id="syncBadge"><span class="sync-dot"></span><span id="syncText">자동 동기화</span></span>
-            <span class="hint" style="font-size:11.5px;font-weight:700">마지막 ${lastSyncLabel()}</span>
+            <span class="hint" style="font-size:11.5px;font-weight:400">마지막 ${lastSyncLabel()}</span>
           </div>
           <div class="note">한쪽 폰에서 지출·일정을 바꾸면 다른 폰에 5초 안에 반영돼요. 입력하던 화면은 방해하지 않아요.</div>
         </section>
@@ -1012,7 +1012,7 @@
             <div class="amount-row">
               <span class="nm">${esc(p.name)}</span>
               <input class="input" data-amt="${p.id}" inputmode="decimal" value="${customInputs[p.id] || ''}" placeholder="0" />
-              <span class="amt" style="min-width:20px;font-size:12px;font-weight:800;color:#8397a6">${currencyLabel}</span>
+              <span class="amt" style="min-width:20px;font-size:12px;font-weight:400;color:#8397a6">${currencyLabel}</span>
             </div>`).join('')}
         </div>`;
         $$('#exExtra [data-amt]').forEach((inp) => inp.addEventListener('input', () => {

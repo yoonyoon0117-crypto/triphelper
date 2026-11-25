@@ -124,7 +124,7 @@ async function run() {
   await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'));
   const heroText = await page.textContent('.hero');
   assert.match(heroText, /정산 상태/, '지출이 없으면 정산 상태로 보인다');
-  assert.match(heroText, /딱 맞았어요/);
+  assert.match(heroText, /딱 맞아요😆/);
   assert.match(heroText, /첫 지출을 기록해 보세요/);
   assert.match(heroText, /총 지출/);
   assert.match(heroText, /0건/, '기본 시드 지출은 0건');
