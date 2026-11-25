@@ -734,3 +734,105 @@ textarea.input { min-height: 72px; resize: vertical; line-height: 1.5; font-weig
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.001ms !important; transition-duration: 0.001ms !important; }
 }
+
+/* ────────────────────────────────────────────────
+   4자리 입장 비밀번호 잠금 화면
+   ──────────────────────────────────────────────── */
+body.is-locked { overflow: hidden; }
+
+.lock {
+  position: fixed; inset: 0; z-index: 120;
+  display: none;
+  align-items: center; justify-content: center;
+  padding: calc(18px + env(safe-area-inset-top)) 20px calc(18px + env(safe-area-inset-bottom));
+  background:
+    radial-gradient(120% 70% at 50% -18%, rgba(120, 205, 255, 0.30) 0%, rgba(120, 205, 255, 0) 62%),
+    radial-gradient(90% 60% at 50% 118%, rgba(255, 214, 170, 0.28) 0%, rgba(255, 214, 170, 0) 60%),
+    var(--cream);
+}
+.lock.is-open { display: flex; }
+
+.lock-card {
+  width: 100%; max-width: 352px;
+  background: var(--paper);
+  border: 1px solid var(--line-soft);
+  border-radius: 28px;
+  padding: 24px 20px 16px;
+  box-shadow: 0 2px 4px rgba(20, 20, 40, 0.04), 0 18px 44px rgba(21, 110, 176, 0.13);
+  text-align: center;
+}
+.lock-card.is-shaking { animation: lockShake 0.42s cubic-bezier(0.36, 0.07, 0.19, 0.97); }
+@keyframes lockShake {
+  10%, 90% { transform: translateX(-1px); }
+  20%, 80% { transform: translateX(2px); }
+  30%, 50%, 70% { transform: translateX(-5px); }
+  40%, 60% { transform: translateX(5px); }
+}
+
+.lock-badge {
+  width: 66px; height: 66px; margin: 0 auto 12px;
+  border-radius: 21px;
+  background: linear-gradient(180deg, #eaf6ff 0%, #d9effe 100%);
+  border: 1px solid var(--sky-line);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.9), 0 6px 16px rgba(21, 110, 176, 0.12);
+  display: flex; align-items: center; justify-content: center;
+}
+.lock-badge img { width: 54px; height: 54px; border-radius: 15px; display: block; }
+
+.lock-title { font-size: 17px; font-weight: 600; letter-spacing: -0.01em; color: var(--ink); }
+.lock-sub { margin-top: 5px; font-size: 12px; font-weight: 400; line-height: 1.55; color: var(--ink-3); }
+
+.lock-dots { display: flex; align-items: center; justify-content: center; gap: 13px; margin: 20px 0 4px; }
+.lock-dot {
+  width: 14px; height: 14px; border-radius: 50%;
+  border: 2px solid var(--sky-line);
+  background: #fff;
+  transition: transform 0.14s ease, background 0.14s ease, border-color 0.14s ease;
+}
+.lock-dot.is-on {
+  background: linear-gradient(180deg, #389ee3 0%, #1b7ac0 100%);
+  border-color: #1b7ac0;
+  transform: scale(1.08);
+  box-shadow: 0 2px 8px rgba(27, 122, 192, 0.32);
+}
+
+.lock-msg {
+  min-height: 19px; margin-bottom: 8px;
+  font-size: 12px; font-weight: 500; color: var(--rose);
+  opacity: 0; transition: opacity 0.18s ease;
+}
+.lock-msg.is-err { opacity: 1; }
+
+.lock-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.lock-key {
+  height: 54px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 21px; font-weight: 500; color: var(--ink);
+  background: linear-gradient(180deg, #ffffff 0%, #f7fbfe 100%);
+  border: 1px solid var(--line);
+  border-radius: 17px;
+  box-shadow: inset 0 1px 0 #fff, 0 2px 5px rgba(20, 40, 60, 0.05);
+  transition: transform 0.09s ease, background 0.09s ease, box-shadow 0.09s ease;
+}
+.lock-key:active {
+  transform: scale(0.955);
+  background: var(--sky-soft);
+  box-shadow: inset 0 1px 3px rgba(21, 110, 176, 0.12);
+}
+.lock-key.is-ghost { background: none; border: 0; box-shadow: none; pointer-events: none; }
+.lock-key.lock-del { font-size: 17px; color: var(--ink-3); }
+
+.lock-foot { margin-top: 12px; font-size: 11px; font-weight: 400; color: #9bb0c0; }
+
+/* 설정 탭 — 입장 비밀번호 변경 카드 */
+.pin-card { display: flex; flex-direction: column; gap: 10px; }
+.pin-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
+.pin-input {
+  text-align: center;
+  letter-spacing: 0.3em;
+  font-size: 17px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  padding-left: calc(12px + 0.3em);
+}
+.st-pin-btn { justify-content: center; }

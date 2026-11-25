@@ -4,6 +4,7 @@
 
   const API = '/api';
   const LS_LAST = 'trip-helper:last';
+  const LS_PIN = 'trip-helper:pin-token';
   const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
   // 트렌디한 파스텔 틴트 팔레트 — 배경 / 은은한 테두리 / 선명한 포인트 글자
   const PALETTE = [
@@ -29,6 +30,7 @@
     sheetOpen: false,
     syncing: false,
     lastSync: null,
+    pinLocked: false,
     meta: { currencies: ['EUR', 'USD', 'JPY', 'GBP', 'THB', 'VND', 'TWD', 'SGD', 'AUD', 'CAD', 'CNY'] },
   };
 
@@ -129,21 +131,154 @@
   }
 
   // ── 서버 통신 ────────────────────────────────────────────
+  const pinToken = () => {
+    try { return localStorage.getItem(LS_PIN) || ''; } catch { return ''; }
+  };
+  const setPinToken = (token) => {
+    try {
+      if (token) localStorage.setItem(LS_PIN, token);
+      else localStorage.removeItem(LS_PIN);
+    } catch { /* 저장 실패해도 이번 방문은 열린 상태 */ }
+  };
+  const pinHeaders = () => {
+    const t = pinToken();
+    return t ? { 'X-Trip-Pin-Token': t } : {};
+  };
+
   async function api(path, { method = 'GET', body } = {}) {
+    const headers = { ...pinHeaders() };
+    if (body) headers['Content-Type'] = 'application/json';
     const res = await fetch(API + path, {
       method,
-      headers: body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: Object.keys(headers).length ? headers : undefined,
       body: body ? JSON.stringify(body) : undefined,
     });
     let data = null;
     try { data = await res.json(); } catch { /* empty */ }
     if (!res.ok) {
+      // 토큰이 만료됐거나 PIN 이 바뀌면 → 잠금 화면을 다시 띄운다
+      if (res.status === 401 && data && (data.code === 'PIN_REQUIRED' || data.code === 'PIN_WRONG')) {
+        setPinToken(null);
+        if (!lock.open) openLock('비밀번호를 다시 한 번 입력해 주세요.');
+      }
       const err = new Error((data && data.error) || '요청을 처리하지 못했어요.');
       err.status = res.status;
       err.data = data;
       throw err;
     }
     return data;
+  }
+
+  // ── 4자리 입장 비밀번호 잠금 화면 ──────────────────────
+  const lock = { open: false, digits: '', busy: false };
+
+  function paintLockDots() {
+    $$('#lockDots .lock-dot').forEach((el, i) => el.classList.toggle('is-on', i < lock.digits.length));
+  }
+  function setLockMsg(text, isErr) {
+    const el = $('#lockMsg');
+    if (!el) return;
+    el.textContent = text || '';
+    el.classList.toggle('is-err', Boolean(isErr));
+  }
+  function openLock(message) {
+    lock.open = true;
+    lock.digits = '';
+    setLockMsg(message || '');
+    paintLockDots();
+    const el = $('#lockScreen');
+    if (el) {
+      el.classList.add('is-open');
+      el.setAttribute('aria-hidden', 'false');
+    }
+    document.body.classList.add('is-locked');
+  }
+  function closeLock() {
+    lock.open = false;
+    lock.digits = '';
+    const el = $('#lockScreen');
+    if (el) {
+      el.classList.remove('is-open');
+      el.setAttribute('aria-hidden', 'true');
+    }
+    document.body.classList.remove('is-locked');
+  }
+  function shakeLock() {
+    const card = $('#lockScreen .lock-card');
+    if (!card) return;
+    card.classList.remove('is-shaking');
+    void card.offsetWidth;
+    card.classList.add('is-shaking');
+    setTimeout(() => card.classList.remove('is-shaking'), 460);
+  }
+
+  async function submitPin() {
+    if (lock.busy || lock.digits.length !== 4) return;
+    lock.busy = true;
+    setLockMsg('');
+    try {
+      const res = await fetch(`${API}/pin/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...pinHeaders() },
+        body: JSON.stringify({ pin: lock.digits }),
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok) {
+        setLockMsg((data && data.error) || '비밀번호가 맞지 않아요.', true);
+        shakeLock();
+        lock.digits = '';
+        paintLockDots();
+        return;
+      }
+      setPinToken(data && data.token);
+      state.pinLocked = true;
+      closeLock();
+      await startApp();
+    } catch {
+      setLockMsg('연결이 잠시 불안해요. 다시 시도해 주세요.', true);
+      shakeLock();
+      lock.digits = '';
+      paintLockDots();
+    } finally {
+      lock.busy = false;
+    }
+  }
+
+  function pressLockKey(key) {
+    if (!lock.open) return;
+    if (key === 'del') {
+      lock.digits = lock.digits.slice(0, -1);
+      setLockMsg('');
+      paintLockDots();
+      return;
+    }
+    if (!/^\d$/.test(key) || lock.digits.length >= 4) return;
+    lock.digits += key;
+    setLockMsg('');
+    paintLockDots();
+    if (lock.digits.length === 4) setTimeout(submitPin, 90);
+  }
+
+  function bindLock() {
+    const pad = $('#lockPad');
+    if (pad) pad.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-key]');
+      if (btn) pressLockKey(btn.dataset.key);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (!lock.open) return;
+      if (/^\d$/.test(e.key)) pressLockKey(e.key);
+      else if (e.key === 'Backspace') { e.preventDefault(); pressLockKey('del'); }
+      else if (e.key === 'Enter') submitPin();
+    });
+  }
+
+  async function fetchPinStatus() {
+    try {
+      const res = await fetch(`${API}/pin/status`, { headers: pinHeaders() });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch { return null; }
   }
 
   // ── 정산 계산(미리보기용 — 서버와 같은 규칙) ──────────────
@@ -958,6 +1093,21 @@
         <button class="btn soft" data-act="new-participant">＋ 참여자 추가</button>
       </div>
 
+      ${state.pinLocked ? `
+      <div class="settings-block">
+        <div class="section-title"><h3>입장 비밀번호</h3><span class="hint">4자리</span></div>
+        <section class="card card-pad pin-card">
+          <div class="pin-fields">
+            <div class="field"><label for="stPinCur">현재 비밀번호</label>
+              <input class="input pin-input" id="stPinCur" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="••••" aria-label="현재 입장 비밀번호 4자리" /></div>
+            <div class="field"><label for="stPinNew">새 비밀번호</label>
+              <input class="input pin-input" id="stPinNew" type="password" inputmode="numeric" maxlength="4" autocomplete="off" placeholder="••••" aria-label="새 입장 비밀번호 4자리" /></div>
+          </div>
+          <button class="btn soft st-pin-btn" data-act="change-pin">비밀번호 변경</button>
+          <div class="note">바꾸면 지금까지 열어 둔 기기는 모두 잠기고, 새 비밀번호를 한 번 더 입력해야 열려요.</div>
+        </section>
+      </div>` : ''}
+
       <div class="settings-block">
         <div class="section-title"><h3>함께 쓰는 링크</h3><span class="hint">로그인 없이 공유</span></div>
         <section class="card card-pad" style="display:flex;flex-direction:column;gap:9px">
@@ -1001,6 +1151,46 @@
     if (cur) cur.addEventListener('change', () => {
       const label = $('#stRateLabel');
       if (label) label.textContent = `환율 (1 ${cur.value} = ?원)`;
+    });
+
+    // 입장 비밀번호 변경 — 현재 4자리 확인 후 교체(바꾸면 다른 기기 토큰은 모두 무효)
+    const pinCur = $('#stPinCur');
+    const pinNew = $('#stPinNew');
+    [pinCur, pinNew].forEach((el) => {
+      if (!el) return;
+      el.addEventListener('input', () => {
+        const clean = el.value.replace(/[^\d]/g, '').slice(0, 4);
+        if (clean !== el.value) el.value = clean;
+      });
+    });
+    const pinBtn = $('#view [data-act="change-pin"]');
+    if (pinBtn) pinBtn.addEventListener('click', async () => {
+      const currentPin = (pinCur && pinCur.value || '').trim();
+      const newPin = (pinNew && pinNew.value || '').trim();
+      if (!/^\d{4}$/.test(currentPin)) { toast('현재 비밀번호 4자리를 넣어 주세요.', true); pinCur.focus(); return; }
+      if (!/^\d{4}$/.test(newPin)) { toast('새 비밀번호 4자리를 넣어 주세요.', true); pinNew.focus(); return; }
+      if (currentPin === newPin) { toast('지금과 다른 비밀번호로 정해 주세요.', true); pinNew.focus(); return; }
+      pinBtn.disabled = true;
+      try {
+        const res = await fetch(`${API}/pin/change`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...pinHeaders() },
+          body: JSON.stringify({ currentPin, pin: newPin }),
+        });
+        const data = await res.json().catch(() => null);
+        if (!res.ok) {
+          throw new Error((data && data.error) || '비밀번호를 바꾸지 못했어요.');
+        }
+        setPinToken(data && data.token);
+        state.pinLocked = true;
+        if (pinCur) pinCur.value = '';
+        if (pinNew) pinNew.value = '';
+        toast('입장 비밀번호를 바꿨어요');
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        pinBtn.disabled = false;
+      }
     });
 
     const saveBtn = $('#view [data-act="save-settings"]');
@@ -1461,8 +1651,9 @@
 
   // ── 동기화 ───────────────────────────────────────────────
   let pollTimer = null;
+  let pollingStarted = false;
   async function syncNow() {
-    if (!state.trip || state.syncing || document.hidden || state.sheetOpen) return;
+    if (!state.trip || state.syncing || document.hidden || state.sheetOpen || lock.open) return;
     state.syncing = true;
     setSync('syncing');
     try {
@@ -1488,6 +1679,8 @@
   }
 
   function startPolling() {
+    if (pollingStarted) return;
+    pollingStarted = true;
     clearInterval(pollTimer);
     pollTimer = setInterval(syncNow, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) syncNow(); });
@@ -1498,6 +1691,7 @@
 
   async function refreshNow() {
     const btn = $('#btnRefresh');
+    if (lock.open) return;
     if (!state.trip) { window.location.reload(); return; }
     btn.classList.add('is-spinning');
     try {
@@ -1565,8 +1759,8 @@
   }
 
   // ── 시작 ─────────────────────────────────────────────────
-  async function boot() {
-    bindGlobal();
+  // PIN 잠금을 통과한 뒤(또는 잠금이 없을 때) 실제 데이터를 불러온다.
+  async function startApp() {
     renderTabs();
     let entryCode = null;
     const m = location.pathname.match(/^\/t\/([A-Za-z0-9]+)/);
@@ -1606,6 +1800,7 @@
       }
       if (entryCode && !target) toast('그 여행 코드를 찾지 못했어요.');
     } catch (err) {
+      if (err.status === 401 && err.data && err.data.code === 'PIN_REQUIRED') return; // 잠금 화면이 이미 떠 있음
       $('#view').innerHTML = `<section class="card empty"><div class="emo">😢</div><div class="t">불러오지 못했어요</div><div class="s">${esc(err.message)}</div><div style="margin-top:12px"><button class="btn primary" onclick="location.reload()">다시 시도</button></div></section>`;
       setSync('off');
     }
@@ -1613,11 +1808,25 @@
     startPolling();
 
     if ('serviceWorker' in navigator) {
-      // boot()의 비동기 작업 뒤에는 'load'가 이미 지나갂을 수 있어, 늦지 않게 바로 등록한다.
+      // startApp()의 비동기 작업 뒤에는 'load'가 이미 지나갔을 수 있어, 늦지 않게 바로 등록한다.
       const registerSw = () => navigator.serviceWorker.register('/sw.js').catch(() => {});
       if (document.readyState === 'complete') registerSw();
       else window.addEventListener('load', registerSw, { once: true });
     }
+  }
+
+  async function boot() {
+    bindGlobal();
+    bindLock();
+    renderTabs();
+    // 입장 비밀번호가 설정된 서버라면 먼저 잠금 화면을 띄운다(정적 파일만 내려오고 여행 데이터는 401).
+    const status = await fetchPinStatus();
+    state.pinLocked = Boolean(status && status.locked);
+    if (status && status.locked && !status.unlocked) {
+      openLock();
+      return;
+    }
+    await startApp();
   }
 
   boot();

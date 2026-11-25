@@ -24,6 +24,7 @@ const {
   stamp,
 } = require('./lib/trips');
 const { createNaverRateClient, RateLookupError } = require('./lib/rates');
+const { PinGate, PinError } = require('./lib/pin');
 
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
@@ -33,8 +34,81 @@ function createApp(store, options = {}) {
   const app = express();
   // 환율 조회 — 테스트에서는 options.rateLookup 으로 네이버 요청을 대체합니다.
   const rateLookup = options.rateLookup || createNaverRateClient();
+  // 4자리 입장 비밀번호 — options.pin 으로 테스트용 게이트를 넣을 수 있습니다.
+  const pin = options.pin || new PinGate({
+    dataDir: options.dataDir || DATA_DIR,
+    envPin: options.envPin !== undefined ? options.envPin : process.env.APP_PIN,
+  });
   app.disable('x-powered-by');
+  // Railway 같은 프록시 뒤에서도 https(보안 쿠키)·실제 접속 IP 를 알 수 있게
+  app.set('trust proxy', 1);
   app.use(express.json({ limit: '200kb' }));
+
+  const pinCookie = (token, req) => {
+    const parts = [`trip_pin=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${Math.floor(pin.tokenTtlMs / 1000)}`];
+    if (req && req.secure) parts.push('Secure'); // https(Railway)에서만 Secure — 로컬 http 테스트에서도 저장되게
+    return parts.join('; ');
+  };
+  const clientKey = (req) => {
+    const fwd = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+    return fwd || req.ip || 'unknown';
+  };
+
+  // ── API 잠금: PIN 이 설정돼 있으면 여행 데이터·환율은 인증 필수 ──
+  //    (health·pin API·정적 파일은 잠금 화면이 뜰 수 있도록 열어 둔다)
+  app.use('/api', (req, res, next) => {
+    if (!pin.locked) return next();
+    const p = req.path;
+    const isPinApi = p === '/pin' || p.startsWith('/pin/');
+    const isHealth = p === '/health';
+    const guarded = p === '/trips' || p.startsWith('/trips/') || p === '/exchange-rate' || p.startsWith('/exchange-rate/');
+    if (isPinApi || isHealth || !guarded) return next();
+    if (pin.isAuthed(req)) return next();
+    return res.status(401).json({ error: '입장 비밀번호가 필요해요.', code: 'PIN_REQUIRED' });
+  });
+
+  // ── 입장 비밀번호 API ─────────────────────────────────────
+  app.get('/api/pin/status', (req, res) => ok(res, pin.status(req)));
+
+  app.post('/api/pin/verify', (req, res) => {
+    if (!pin.locked) return ok(res, { ok: true, locked: false, unlocked: true, token: null });
+    const key = clientKey(req);
+    if (!pin.allowAttempt(key)) {
+      res.set('Retry-After', '60');
+      return res.status(429).json({ error: '시도가 너무 많아요. 1분 뒤에 다시 해 주세요.', code: 'PIN_TOO_MANY' });
+    }
+    if (!pin.verify(req.body && req.body.pin)) {
+      pin.noteFailure(key);
+      return res.status(401).json({ error: '비밀번호가 맞지 않아요.', code: 'PIN_WRONG' });
+    }
+    pin.noteSuccess(key);
+    const token = pin.issueToken();
+    res.set('Set-Cookie', pinCookie(token, req));
+    return ok(res, { ok: true, locked: true, unlocked: true, token, expiresInDays: Math.round(pin.tokenTtlMs / 86400000) });
+  });
+
+  app.post('/api/pin/setup', async (req, res, next) => {
+    try {
+      await pin.setup(req.body && req.body.pin);
+      const token = pin.issueToken();
+      res.set('Set-Cookie', pinCookie(token, req));
+      return ok(res, { ok: true, locked: true, unlocked: true, token });
+    } catch (err) {
+      return next(err);
+    }
+  });
+
+  app.post('/api/pin/change', async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      await pin.change(body.currentPin, body.pin);
+      const token = pin.issueToken();
+      res.set('Set-Cookie', pinCookie(token, req));
+      return ok(res, { ok: true, locked: true, unlocked: true, token });
+    } catch (err) {
+      return next(err);
+    }
+  });
 
   const findTrip = (idOrCode) => {
     const s = store.snapshot();
@@ -385,6 +459,9 @@ function createApp(store, options = {}) {
     if (err instanceof HttpError) {
       return res.status(err.status).json({ error: err.message, code: err.code, ...(err.details || {}) });
     }
+    if (err instanceof PinError) {
+      return res.status(err.status).json({ error: err.message, code: err.code });
+    }
     if (err && err.type === 'entity.parse.failed') {
       return res.status(400).json({ error: '요청 형식이 올바르지 않습니다.' });
     }
@@ -403,7 +480,9 @@ async function start() {
       state.trips.push(seedTrip());
     });
   }
-  const app = createApp(store);
+  const pin = new PinGate({ dataDir: DATA_DIR, envPin: process.env.APP_PIN });
+  if (pin.locked) console.log(`[family-trip] 잠금 켜짐 (${pin.envPin ? 'APP_PIN 환경변수' : path.join(DATA_DIR, 'pin.json')})`);
+  const app = createApp(store, { pin });
   const server = app.listen(PORT, () => {
     console.log(`[family-trip] http://localhost:${PORT}  (data: ${DATA_DIR})`);
   });

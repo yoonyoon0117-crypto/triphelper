@@ -18,6 +18,36 @@
 <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
+<!-- 4자리 입장 비밀번호 잠금 화면 (PIN 이 설정된 서버에서만 뜬다) -->
+<div class="lock" id="lockScreen" aria-hidden="true">
+  <div class="lock-card" role="dialog" aria-modal="true" aria-labelledby="lockTitle">
+    <div class="lock-badge"><img src="/icons/icon-192.png" alt="" width="54" height="54" /></div>
+    <h1 class="lock-title" id="lockTitle">Trip helper✈️</h1>
+    <p class="lock-sub" id="lockSub">우리 가족만 보는 여행 보드예요<br>입장 비밀번호 4자리를 입력해 주세요</p>
+    <div class="lock-dots" id="lockDots" role="status" aria-live="polite" aria-label="비밀번호 입력 상태">
+      <span class="lock-dot"></span>
+      <span class="lock-dot"></span>
+      <span class="lock-dot"></span>
+      <span class="lock-dot"></span>
+    </div>
+    <div class="lock-msg" id="lockMsg" role="alert"></div>
+    <div class="lock-pad" id="lockPad">
+      <button class="lock-key" type="button" data-key="1">1</button>
+      <button class="lock-key" type="button" data-key="2">2</button>
+      <button class="lock-key" type="button" data-key="3">3</button>
+      <button class="lock-key" type="button" data-key="4">4</button>
+      <button class="lock-key" type="button" data-key="5">5</button>
+      <button class="lock-key" type="button" data-key="6">6</button>
+      <button class="lock-key" type="button" data-key="7">7</button>
+      <button class="lock-key" type="button" data-key="8">8</button>
+      <button class="lock-key" type="button" data-key="9">9</button>
+      <span class="lock-key is-ghost" aria-hidden="true"></span>
+      <button class="lock-key" type="button" data-key="0">0</button>
+      <button class="lock-key lock-del" type="button" data-key="del" aria-label="한 자리 지우기">⌫</button>
+    </div>
+    <p class="lock-foot">한 번 입력하면 이 기기에서는 다시 묻지 않아요</p>
+  </div>
+</div>
 <div class="app" id="app">
   <header class="appbar">
     <div class="appbar-row">

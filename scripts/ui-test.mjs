@@ -544,6 +544,7 @@ async function run() {
   await page.waitForFunction(() => document.querySelector('#view').textContent.includes('편의점'), null, { timeout: 12000 });
   assert.match(await page.textContent('#view'), /395,000/);
   await shot(page, '14-sync.png');
+  await ctx2.close(); // 이후 PIN 잠금 단계에서 예전 기기가 401 을 받지 않도록 정리
 
   // ── 8. 여행 전환 복귀 ────────────────────────
   step('8. 여행 전환으로 스페인 여행 복귀');
@@ -597,7 +598,7 @@ async function run() {
     return null;
   });
   assert.ok(precachedFonts, '폰트 프리캐시 없음 (오프라인 로드 불가)');
-  assert.equal(precachedFonts.cache, 'trip-helper-v10', `캐시 버전: ${precachedFonts.cache}`);
+  assert.equal(precachedFonts.cache, 'trip-helper-v11', `캐시 버전: ${precachedFonts.cache}`);
   console.log(`   프리캐시: ${precachedFonts.cache} → ${precachedFonts.paths.join(', ')}`);
   const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
   assert.match(viewport, /viewport-fit=cover/);
@@ -618,9 +619,108 @@ async function run() {
   await page.waitForSelector('#ntName', { timeout: 8000 });
   assert.match(await page.textContent('#sheetTitle'), /새 여행/);
 
-  // ── 10. 콘솔 오류 ────────────────────────────
-  step('10. 콘솔 오류 확인');
-  const realErrors = errors.filter((e) => !/favicon\.ico|Failed to load resource: the server responded with a status of 404/i.test(e));
+  // ── 10. 4자리 입장 비밀번호 잠금 ─────────────
+  // (테스트 서버에만 설정 — 실제 서비스 비밀번호와 무관한 임의 숫자)
+  step('10. 4자리 PIN 잠금 화면 · 한 번 입력하면 기억');
+  const TEST_PIN = '5729';
+  const TEST_PIN_NEW = '8314';
+  assert.equal(await page.evaluate(() => localStorage.getItem('trip-helper:pin-token')), null);
+
+  const setupRes = await fetch(`${base}/api/pin/setup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ pin: TEST_PIN }),
+  });
+  assert.equal(setupRes.status, 200, 'PIN 설정');
+  const setupBody = await setupRes.json();
+  assert.equal(setupBody.locked, true);
+
+  // 설정 전에 열어 둔 기기도, 새로 열면 잠금 화면이 뜼다
+  await page.goto(base, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#lockScreen.is-open');
+  assert.match(await page.textContent('#lockScreen'), /비밀번호 4자리/);
+  assert.equal(await page.$$eval('#lockScreen .lock-dot', (els) => els.length), 4, '4자리 도트');
+  assert.equal(await page.$$eval('#lockScreen .lock-key[data-key]', (els) => els.length), 11, '0~9 + 지우기 키');
+  await shot(page, '15-lock.png');
+
+  // 인증 없이 API 는 401
+  const anon = await fetch(`${base}/api/trips`);
+  assert.equal(anon.status, 401);
+
+  // 틀린 비밀번호 → 안내 + 입력 초기화
+  for (const d of '0000') await page.click(`#lockPad [data-key="${d}"]`);
+  await page.waitForSelector('#lockMsg.is-err');
+  assert.match(await page.textContent('#lockMsg'), /비밀번호가 맞지 않아요/);
+  await page.waitForTimeout(200);
+  assert.equal(await page.$$eval('#lockDots .lock-dot.is-on', (els) => els.length), 0, '틀리면 다시 비움');
+  assert.match(await page.getAttribute('#lockScreen', 'class'), /is-open/);
+  await shot(page, '16-lock-wrong.png');
+
+  // 지우기 키도 동작
+  for (const d of '12') await page.click(`#lockPad [data-key="${d}"]`);
+  assert.equal(await page.$$eval('#lockDots .lock-dot.is-on', (els) => els.length), 2);
+  await page.click('#lockPad [data-key="del"]');
+  assert.equal(await page.$$eval('#lockDots .lock-dot.is-on', (els) => els.length), 1);
+  await page.click('#lockPad [data-key="del"]');
+
+  // 맞는 비밀번호 → 바로 열리고 토큰을 저장한다
+  for (const d of TEST_PIN) await page.click(`#lockPad [data-key="${d}"]`);
+  await page.waitForFunction(() => !document.querySelector('#lockScreen').classList.contains('is-open'), null, { timeout: 10000 });
+  const storedToken = await page.evaluate(() => localStorage.getItem('trip-helper:pin-token'));
+  assert.ok(storedToken && storedToken.startsWith('p1.'), 'localStorage 에 토큰 저장');
+  const authed = await fetch(`${base}/api/trips`, { headers: { 'X-Trip-Pin-Token': storedToken } });
+  assert.equal(authed.status, 200, '토큰으로 API 통과');
+
+  // 다음에 다시 열어도 묻지 않는다 (localStorage 토큰)
+  await page.goto(`${base}/`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#tabbar');
+  await page.waitForTimeout(700);
+  assert.ok(!(await page.getAttribute('#lockScreen', 'class')).includes('is-open'), '재접속 시 잠금 화면 없음');
+
+  // ── 11. 설정 탭에서 입장 비밀번호 변경 ────────
+  step('11. 설정 탭 — 입장 비밀번호 변경 (기존 기기 토큰 무효)');
+  const seeded = await fetch(`${base}/api/trips`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Trip-Pin-Token': storedToken },
+    body: JSON.stringify({ name: '잠금 테스트 여행', startDate: '2027-03-01', endDate: '2027-03-03', localCurrency: 'EUR', exchangeRate: 1500, template: 'twoFamilies' }),
+  }).then((r) => r.json());
+  assert.ok(seeded.id);
+  await page.goto(`${base}/t/${seeded.code}`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#tabbar');
+  await page.click('#tabbar .tab[data-tab="settings"]');
+  await page.waitForSelector('#stPinCur');
+  assert.match(await page.textContent('#view'), /입장 비밀번호/);
+  await page.locator('#stPinCur').scrollIntoViewIfNeeded();
+  await page.waitForTimeout(300);
+  await shot(page, '17-settings-pin.png');
+
+  await page.fill('#stPinCur', TEST_PIN);
+  await page.fill('#stPinNew', TEST_PIN_NEW);
+  await page.click('#view [data-act="change-pin"]');
+  await page.waitForTimeout(900);
+  assert.match(await page.textContent('#toast'), /입장 비밀번호를 바꿨어요/);
+  const tokenAfterChange = await page.evaluate(() => localStorage.getItem('trip-helper:pin-token'));
+  assert.ok(tokenAfterChange && tokenAfterChange !== storedToken, '새 토큰으로 교체');
+
+  // 예전 토큰은 즉시 무효 → 다른 기기는 다시 잠금다
+  assert.equal((await fetch(`${base}/api/trips`, { headers: { 'X-Trip-Pin-Token': storedToken } })).status, 401);
+  const otherCtx = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true, locale: 'ko-KR' });
+  const otherPage = await otherCtx.newPage();
+  await otherPage.goto(`${base}/t/${seeded.code}`, { waitUntil: 'networkidle' });
+  await otherPage.waitForSelector('#lockScreen.is-open');
+  for (const d of TEST_PIN) await otherPage.click(`#lockPad [data-key="${d}"]`);
+  await otherPage.waitForSelector('#lockMsg.is-err');
+  assert.match(await otherPage.textContent('#lockMsg'), /비밀번호가 맞지 않아요/, '바꾼 뒤에는 예전 비밀번호 불가');
+  for (const d of TEST_PIN_NEW) await otherPage.click(`#lockPad [data-key="${d}"]`);
+  await otherPage.waitForFunction(() => document.querySelector('#tripName').textContent.includes('잠금 테스트'), null, { timeout: 10000 });
+  assert.ok(!(await otherPage.getAttribute('#lockScreen', 'class')).includes('is-open'), '새 비밀번호로 열림');
+  await otherPage.screenshot({ path: path.join(SHOT_DIR, '18-lock-new-pin.png') });
+  await otherCtx.close();
+
+  // ── 12. 콘솔 오류 ────────────────────────────
+  step('12. 콘솔 오류 확인');
+  // 잠금 테스트에서 일부러 틀린 비밀번호를 넣어 생기는 401 네트워크 로그는 앱 오류가 아니므로 제외
+  const realErrors = errors.filter((e) => !/favicon\.ico|Failed to load resource: the server responded with a status of (404|401)/i.test(e));
   assert.deepEqual(realErrors, [], `콘솔 오류: ${realErrors.join(' | ')}`);
 
   await browser.close();
