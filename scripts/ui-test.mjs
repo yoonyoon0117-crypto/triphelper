@@ -691,11 +691,152 @@ async function run() {
     return null;
   });
   assert.ok(precachedFonts, '폰트 프리캐시 없음 (오프라인 로드 불가)');
-  assert.equal(precachedFonts.cache, 'trip-helper-v12', `캐시 버전: ${precachedFonts.cache}`);
+  assert.equal(precachedFonts.cache, 'trip-helper-v13', `캐시 버전: ${precachedFonts.cache}`);
   console.log(`   프리캐시: ${precachedFonts.cache} → ${precachedFonts.paths.join(', ')}`);
   const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
   assert.match(viewport, /viewport-fit=cover/);
   assert.match(viewport, /maximum-scale=1/);
+
+  // ── 9-5. 오프라인 모드 ───────────────────────
+  step('9-5. 오프라인 — 저장해 둔 여행으로 일정·정산·환율 계산 · 저장은 친절한 안내');
+  const offCtx = await browser.newContext({
+    viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
+    locale: 'ko-KR', timezoneId: 'Asia/Seoul',
+  });
+  const offPage = await offCtx.newPage();
+  offPage.setDefaultTimeout(15000);
+  offPage.on('pageerror', (e) => errors.push(`offline pageerror: ${e.message}`));
+  offPage.on('console', (m) => { if (m.type() === 'error') errors.push(`offline console: ${m.text()}`); });
+
+  // (1) 온라인에서 한 번 열면 여행 목록·상세가 폰에 저장된다
+  await offPage.goto(`${base}/t/${tripBefore.code}`, { waitUntil: 'networkidle' });
+  await offPage.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'));
+  await offPage.evaluate(async () => { await navigator.serviceWorker.register('/sw.js'); });
+  await offPage.reload({ waitUntil: 'networkidle' });
+  await offPage.waitForFunction(() => navigator.serviceWorker.controller !== null, null, { timeout: 15000 });
+  const cachedOnline = await offPage.evaluate(() => {
+    const raw = localStorage.getItem('triphelper_offline_cache_v1');
+    if (!raw) return null;
+    const c = JSON.parse(raw);
+    return { trips: c.trips.map((t) => t.code), details: Object.keys(c.tripsById || {}), savedAt: c.savedAt };
+  });
+  assert.ok(cachedOnline, '오프라인 캐시가 폰에 저장된다');
+  assert.ok(cachedOnline.trips.includes(tripBefore.code), `캐시된 여행 목록: ${cachedOnline.trips.join(',')}`);
+  assert.ok(cachedOnline.details.length > 0, '여행 상세(일정·정산)도 함께 저장');
+  assert.ok(cachedOnline.savedAt, '저장 시각 기록');
+
+  // (2) 오프라인 새로고침 — 공유 링크 경로(/t/CODE)에서도 앱이 뜨고 저장 내용을 그린다
+  await offCtx.setOffline(true);
+  assert.equal(await offPage.evaluate(() => navigator.onLine), false, '오프라인 전환');
+  await offPage.reload({ waitUntil: 'domcontentloaded' });
+  await offPage.waitForSelector('#tabbar');
+  await offPage.waitForFunction(() => document.querySelector('#offlineBar') && !document.querySelector('#offlineBar').hidden, null, { timeout: 12000 });
+  assert.match(await offPage.textContent('#offlineBar'), /오프라인 모드 · 마지막 저장 내용 표시 중/, '오프라인 배지');
+  assert.match(await offPage.textContent('#tripName'), /스페인/, '저장해 둔 여행이 그대로 열린다');
+  assert.doesNotMatch(await offPage.getAttribute('#lockScreen', 'class'), /is-open/, '잠금 화면으로 막히지 않는다');
+  assert.doesNotMatch(await offPage.textContent('#view'), /불러오지 못했어요/, '오프라인 오류 화면 없음');
+
+  // 일정 탭
+  const offPlan = await offPage.textContent('#view');
+  assert.match(offPlan, /마드리드 바라하스 공항/, '오프라인 일정 탭');
+  assert.match(offPlan, /프라도 미술관/);
+  assert.match(offPlan, /Day 1/);
+  await shot(offPage, '19-offline-plan.png');
+
+  // 정산 탭
+  await offPage.click('#tabbar .tab[data-tab="settle"]');
+  await offPage.waitForSelector('.hero');
+  await offPage.waitForTimeout(300);
+  const offSettle = await offPage.textContent('#view');
+  assert.match(offSettle, /총 지출/, '오프라인 정산 탭');
+  assert.match(offSettle, /김家/);
+  assert.match(offSettle, /1 EUR = 1,471\.88원/);
+
+  // 환율 계산기 — €10 → 원화
+  await offPage.click('#tabbar .tab[data-tab="rate"]');
+  await offPage.waitForSelector('#cvLocal');
+  await offPage.waitForTimeout(250);
+  await offPage.fill('#cvLocal', '10');
+  await offPage.waitForTimeout(150);
+  assert.equal(await offPage.inputValue('#cvKrw'), '14,719', '오프라인 환율 계산 €10 → 14,719원');
+  await shot(offPage, '20-offline-rate.png');
+  await offPage.click('#view [data-act="rate-clear"]');
+
+  // 네이버 환율 불러오기 → 친절한 안내(튕기지 않음)
+  await offPage.click('#btnRateFetch');
+  await offPage.waitForTimeout(600);
+  assert.match(await offPage.textContent('#toast'), /인터넷이 연결되면 환율을 불러올 수 있어요/);
+
+  // 지출 저장 시도 → 친절한 안내 + 입력 시트는 그대로(입력 내용 보존)
+  await offPage.click('#tabbar .tab[data-tab="settle"]');
+  await offPage.waitForTimeout(300);
+  await offPage.click('#btnAdd');
+  await offPage.waitForSelector('#exTitle');
+  await offPage.fill('#exTitle', '오프라인 테스트');
+  await offPage.fill('#exAmount', '10');
+  await offPage.click('[data-act="save-expense"]');
+  await offPage.waitForTimeout(700);
+  assert.match(await offPage.textContent('#toast'), /인터넷이 연결되면 저장할 수 있어요/);
+  assert.match(await offPage.getAttribute('#sheetLayer', 'class'), /is-open/, '저장 실패해도 입력 시트 유지');
+  assert.equal(await offPage.inputValue('#exTitle'), '오프라인 테스트');
+  await offPage.click('.sheet-close');
+  await offPage.waitForTimeout(400);
+
+  // (3) 다시 온라인 → 배지 해제 + 서버 내용으로 자동 동기화
+  await offCtx.setOffline(false);
+  await offPage.waitForFunction(() => document.querySelector('#offlineBar').hidden, null, { timeout: 15000 });
+  assert.equal(await offPage.evaluate(() => navigator.onLine), true);
+  const offTripNow = (await api(`/api/trips/${tripBefore.id}`)).data;
+  const pollExpense = await fetch(`${base}/api/trips/${tripBefore.id}/expenses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: '온라인 복구 확인', amount: 4, currency: 'local', payerId: offTripNow.participants[0].id, split: { mode: 'even' }, date: '2026-12-21' }),
+  });
+  assert.equal(pollExpense.status, 201);
+  await offPage.waitForFunction(() => document.querySelector('#view').textContent.includes('온라인 복구 확인'), null, { timeout: 12000 });
+
+  // (4) 여행 삭제 → 폰에 저장한 그 여행도 바로 사라진다
+  await offPage.click('#tabbar .tab[data-tab="settle"]');
+  await offPage.waitForTimeout(200);
+  const tempTrip = await fetch(`${base}/api/trips`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: '🗑️ 캐시 정리 테스트', startDate: '2027-05-01', endDate: '2027-05-03', localCurrency: 'EUR', exchangeRate: 1500, template: 'twoFamilies' }),
+  }).then((r) => r.json());
+  await offPage.goto(`${base}/t/${tempTrip.code}`, { waitUntil: 'networkidle' });
+  await offPage.waitForFunction(() => document.querySelector('#tripName').textContent.includes('캐시 정리'));
+  const beforeDel = await offPage.evaluate(() => JSON.parse(localStorage.getItem('triphelper_offline_cache_v1')).trips.map((t) => t.code));
+  assert.ok(beforeDel.includes(tempTrip.code), '캐시에 새 여행도 저장');
+  await offPage.click('#tabbar .tab[data-tab="settings"]');
+  await offPage.waitForSelector('[data-act="delete-trip"]');
+  await offPage.click('[data-act="delete-trip"]');
+  await offPage.waitForSelector('[data-act="confirm-yes"]');
+  await offPage.click('[data-act="confirm-yes"]');
+  await offPage.waitForTimeout(1200);
+  const afterDel = await offPage.evaluate(() => {
+    const raw = localStorage.getItem('triphelper_offline_cache_v1');
+    return raw ? JSON.parse(raw) : null;
+  });
+  assert.ok(afterDel, '다른 여행이 남아 있으니 캐시는 유지');
+  assert.ok(!afterDel.trips.some((t) => t.code === tempTrip.code), '삭제한 여행은 폰 캐시에서 제거');
+  assert.ok(!afterDel.tripsById[tempTrip.id], '삭제한 여행 상세도 제거');
+
+  // (5) 다른 기기에서 지운 여행은 다음 목록 동기화에서 정리
+  const ghostTrip = await fetch(`${base}/api/trips`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: '🧹 다른 기기 삭제 테스트', startDate: '2027-06-01', endDate: '2027-06-03', localCurrency: 'EUR', exchangeRate: 1500, template: 'twoFamilies' }),
+  }).then((r) => r.json());
+  await offPage.goto(base, { waitUntil: 'networkidle' });
+  await offPage.waitForTimeout(700);
+  const withGhost = await offPage.evaluate(() => JSON.parse(localStorage.getItem('triphelper_offline_cache_v1')).trips.map((t) => t.code));
+  assert.ok(withGhost.includes(ghostTrip.code), '목록을 받으면 캐시에 들어온다');
+  assert.equal((await fetch(`${base}/api/trips/${ghostTrip.id}`, { method: 'DELETE' })).status, 200);
+  await offPage.goto(base, { waitUntil: 'networkidle' });
+  await offPage.waitForTimeout(800);
+  const afterGhost = await offPage.evaluate(() => JSON.parse(localStorage.getItem('triphelper_offline_cache_v1')).trips.map((t) => t.code));
+  assert.ok(!afterGhost.includes(ghostTrip.code), '서버에서 사라진 여행은 폰 캐시에서도 사라진다');
+  await offCtx.close();
 
   // ── 9-1. 마지막 여행 삭제 → 새 여행 안내 ─────
   step('9-1. 여행을 모두 지우면 새 여행 안내');
@@ -709,6 +850,8 @@ async function run() {
   }
   const left = (await api('/api/trips')).data.trips.length;
   assert.equal(left, 0, '모든 여행이 삭제됨');
+  const cacheAfterAll = await page.evaluate(() => localStorage.getItem('triphelper_offline_cache_v1'));
+  assert.equal(cacheAfterAll, null, '여행이 모두 사라지면 폰의 오프라인 캐시 키도 삭제');
   await page.waitForSelector('#ntName', { timeout: 8000 });
   assert.match(await page.textContent('#sheetTitle'), /새 여행/);
 
@@ -810,10 +953,37 @@ async function run() {
   await otherPage.screenshot({ path: path.join(SHOT_DIR, '18-lock-new-pin.png') });
   await otherCtx.close();
 
+  // ── 11-1. 401(비밀번호 변경·토큰 무효) → 폰에 저장한 오프라인 내용도 함께 삭제 ──
+  step('11-1. 다른 기기에서 비밀번호를 또 바꾸면 → 이 기기 401 · 폰 저장 내용도 삭제');
+  const cacheBefore401 = await page.evaluate(() => localStorage.getItem('triphelper_offline_cache_v1'));
+  assert.ok(cacheBefore401, '오프라인 캐시가 저장되어 있다');
+  // 다른 기기에서 한 번 더 바꾸면 이 기기의 쿠키·저장 토큰이 모두 무효가 된다 (실제 401)
+  const PIN_THIRD = '6047';
+  const changedAgain = await fetch(`${base}/api/pin/change`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ currentPin: TEST_PIN_NEW, pin: PIN_THIRD }),
+  });
+  assert.equal(changedAgain.status, 200, '다른 기기에서 비밀번호 재변경');
+  await page.click('#btnRefresh');
+  await page.waitForSelector('#lockScreen.is-open', { timeout: 10000 });
+  await page.waitForTimeout(300);
+  assert.equal(await page.evaluate(() => localStorage.getItem('triphelper_offline_cache_v1')), null, '401 뒤 오프라인 캐시 삭제');
+  assert.equal(await page.evaluate(() => localStorage.getItem('trip-helper:pin-token')), null, '무효 토큰도 삭제');
+  // 다시 오프라인이 되어도 예전 내용을 볼 수 없다 (잠금을 푼 적 없는 기기와 같은 안내)
+  await page.context().setOffline(true);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#view');
+  await page.waitForTimeout(800);
+  assert.match(await page.textContent('#view'), /오프라인 상태예요/, '예전 내용 대신 오프라인 안내');
+  assert.doesNotMatch(await page.textContent('#tripName'), /잠금 테스트/);
+  await page.context().setOffline(false);
+  await page.waitForTimeout(400);
+
   // ── 12. 콘솔 오류 ────────────────────────────
   step('12. 콘솔 오류 확인');
   // 잠금 테스트에서 일부러 틀린 비밀번호를 넣어 생기는 401 네트워크 로그는 앱 오류가 아니므로 제외
-  const realErrors = errors.filter((e) => !/favicon\.ico|Failed to load resource: the server responded with a status of (404|401)/i.test(e));
+  const realErrors = errors.filter((e) => !/favicon\.ico|Failed to load resource: the server responded with a status of (404|401)|ERR_INTERNET_DISCONNECTED/i.test(e));
   assert.deepEqual(realErrors, [], `콘솔 오류: ${realErrors.join(' | ')}`);
 
   await browser.close();

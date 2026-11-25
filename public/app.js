@@ -5,6 +5,8 @@
   const API = '/api';
   const LS_LAST = 'trip-helper:last';
   const LS_PIN = 'trip-helper:pin-token';
+  // 오프라인에서도 마지막 내용을 볼 수 있게 여행 목록·상세를 폰에 저장하는 키
+  const LS_OFFLINE = 'triphelper_offline_cache_v1';
   const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
   // 트렌디한 파스텔 틴트 팔레트 — 배경 / 은은한 테두리 / 선명한 포인트 글자
   const PALETTE = [
@@ -31,6 +33,8 @@
     syncing: false,
     lastSync: null,
     pinLocked: false,
+    offline: false,
+    offlineSavedAt: null,
     showPastDays: false,
     meta: { currencies: ['EUR', 'USD', 'JPY', 'GBP', 'THB', 'VND', 'TWD', 'SGD', 'AUD', 'CAD', 'CNY'] },
   };
@@ -159,20 +163,111 @@
     return t ? { 'X-Trip-Pin-Token': t } : {};
   };
 
+  // ── 오프라인 저장(캐시) ─────────────────────────────────────
+  // 온라인에서 받은 여행 목록·상세를 폰(localStorage)에 저장해 두고,
+  // 인터넷이 끊겨도 한 번 잠금을 푼 기기라면 그대로 보여 준다.
+  //   · 서버 목록을 받을 때마다 목록을 똑같이 맞춘다(다른 기기에서 지운 여행도 정리)
+  //   · 여행을 삭제하면 그 여행은 폰에서도 바로 지운다(남은 여행이 없으면 키 자체 삭제)
+  //   · 비밀번호가 바뀜·무효(401)면 토큰과 함께 저장 내용도 지운다
+  const emptyCache = () => ({ v: 1, savedAt: null, meta: null, trips: [], tripsById: {} });
+  function cacheRead() {
+    try {
+      const raw = localStorage.getItem(LS_OFFLINE);
+      if (!raw) return null;
+      const data = JSON.parse(raw);
+      if (!data || !Array.isArray(data.trips) || !data.tripsById || typeof data.tripsById !== 'object') return null;
+      return data;
+    } catch { return null; }
+  }
+  function cacheWrite(data) {
+    try { localStorage.setItem(LS_OFFLINE, JSON.stringify(data)); } catch { /* 용량 부족 등 — 없어도 앱은 돈다 */ }
+  }
+  function cacheClear() {
+    try { localStorage.removeItem(LS_OFFLINE); } catch { /* ignore */ }
+  }
+  const hasCache = () => {
+    const c = cacheRead();
+    return Boolean(c && c.trips && c.trips.length);
+  };
+  const summaryOfTrip = (t) => ({
+    id: t.id,
+    code: t.code,
+    name: t.name,
+    subtitle: t.subtitle,
+    startDate: t.startDate,
+    endDate: t.endDate,
+    localCurrency: t.localCurrency,
+    exchangeRate: t.exchangeRate,
+    participantCount: (t.participants || []).length,
+    participantNames: (t.participants || []).map((p) => p.name),
+    version: t.version,
+    updatedAt: t.updatedAt,
+  });
+  function cacheSaveMeta(meta) {
+    if (!meta) return;
+    const prev = cacheRead() || emptyCache();
+    cacheWrite({ ...prev, v: 1, meta });
+  }
+  // 서버 여행 목록과 폰 저장 목록을 똑같이 맞춘다.
+  function cacheSaveList(trips) {
+    const list = Array.isArray(trips) ? trips : [];
+    if (!list.length) { cacheClear(); return; } // 남은 여행이 없으면 저장 키 자체를 지운다
+    const prev = cacheRead() || emptyCache();
+    const ids = new Set(list.map((t) => t.id));
+    const tripsById = {};
+    for (const [id, trip] of Object.entries(prev.tripsById)) if (ids.has(id)) tripsById[id] = trip;
+    cacheWrite({ ...prev, v: 1, savedAt: new Date().toISOString(), trips: list, tripsById });
+  }
+  function cacheSaveTrip(trip) {
+    if (!trip || !trip.id) return;
+    const prev = cacheRead() || emptyCache();
+    const trips = (prev.trips || []).filter((t) => t.id !== trip.id);
+    trips.push(summaryOfTrip(trip));
+    cacheWrite({
+      ...prev,
+      v: 1,
+      savedAt: new Date().toISOString(),
+      trips,
+      tripsById: { ...prev.tripsById, [trip.id]: trip },
+    });
+  }
+  // 여행 삭제 — 폰에 저장한 그 여행도 바로 지운다.
+  function cacheRemoveTrip(id) {
+    const prev = cacheRead();
+    if (!prev) return;
+    const trips = (prev.trips || []).filter((t) => t.id !== id);
+    const tripsById = { ...prev.tripsById };
+    delete tripsById[id];
+    if (!trips.length && !Object.keys(tripsById).length) { cacheClear(); return; }
+    cacheWrite({ ...prev, trips, tripsById, savedAt: new Date().toISOString() });
+  }
+
   async function api(path, { method = 'GET', body } = {}) {
     const headers = { ...pinHeaders() };
     if (body) headers['Content-Type'] = 'application/json';
-    const res = await fetch(API + path, {
-      method,
-      headers: Object.keys(headers).length ? headers : undefined,
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    let res;
+    try {
+      res = await fetch(API + path, {
+        method,
+        headers: Object.keys(headers).length ? headers : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch {
+      // 네트워크가 끊김 — 저장이 필요한 작업이면 튕기지 않고 친절하게 알린다
+      markOffline();
+      const offlineErr = new Error(method === 'GET'
+        ? (path.startsWith('/exchange-rate') ? '인터넷이 연결되면 환율을 불러올 수 있어요.' : '인터넷이 연결되지 않았어요. 연결되면 다시 불러올게요.')
+        : '인터넷이 연결되면 저장할 수 있어요.');
+      offlineErr.offline = true;
+      throw offlineErr;
+    }
     let data = null;
     try { data = await res.json(); } catch { /* empty */ }
     if (!res.ok) {
-      // 토큰이 만료됐거나 PIN 이 바뀌면 → 잠금 화면을 다시 띄운다
+      // 토큰이 만료됐거나 PIN 이 바뀌면 → 잠금 화면을 다시 띄우고 폰에 저장한 내용도 지운다
       if (res.status === 401 && data && (data.code === 'PIN_REQUIRED' || data.code === 'PIN_WRONG')) {
         setPinToken(null);
+        cacheClear();
         if (!lock.open) openLock('비밀번호를 다시 한 번 입력해 주세요.');
       }
       const err = new Error((data && data.error) || '요청을 처리하지 못했어요.');
@@ -292,7 +387,7 @@
       const res = await fetch(`${API}/pin/status`, { headers: pinHeaders() });
       if (!res.ok) return null;
       return await res.json();
-    } catch { return null; }
+    } catch { return undefined; } // 네트워크 자체가 끊김(오프라인) — 잠금 여부를 알 수 없음
   }
 
   // ── 정산 계산(미리보기용 — 서버와 같은 규칙) ──────────────
@@ -343,12 +438,15 @@
   let syncKind = 'ok';
   let syncText = '자동 동기화';
 
-  function applyTrip(trip, { soft = false } = {}) {
+  function applyTrip(trip, { soft = false, fromCache = false } = {}) {
     const sameTrip = state.trip && state.trip.id === trip.id;
     state.trip = trip;
     state.version = trip.version;
     state.lastSync = new Date();
-    localStorage.setItem(LS_LAST, trip.code);
+    if (!fromCache) {
+      localStorage.setItem(LS_LAST, trip.code);
+      cacheSaveTrip(trip); // 온라인에서 받은 최신 내용을 폰에도 저장
+    }
     renderHeader();
     if (!sameTrip) state.tab = 'plan';
     if (!sameTrip) state.showPastDays = false;
@@ -361,7 +459,39 @@
     if (!soft && !sameTrip) window.scrollTo({ top: 0 });
     const url = `/t/${trip.code}`;
     if (location.pathname !== url) history.replaceState({}, '', url);
-    setSync('ok');
+    if (fromCache) {
+      markOffline(state.offlineSavedAt);
+    } else {
+      setSync('ok');
+      clearOffline();
+    }
+  }
+
+  // ── 오프라인 표시 ─────────────────────────────────────────
+  function offlineWhenLabel() {
+    const at = state.offlineSavedAt || (cacheRead() && cacheRead().savedAt);
+    if (!at) return '';
+    try { return `${new Date(at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 저장분`; } catch { return ''; }
+  }
+  function paintOffline() {
+    const bar = $('#offlineBar');
+    if (!bar) return;
+    bar.hidden = !state.offline;
+    bar.setAttribute('aria-hidden', state.offline ? 'false' : 'true');
+    const when = $('#offlineWhen');
+    if (when) when.textContent = state.offline ? offlineWhenLabel() : '';
+  }
+  function markOffline(savedAt) {
+    state.offline = true;
+    if (savedAt) state.offlineSavedAt = savedAt;
+    else if (state.offlineSavedAt == null) state.offlineSavedAt = (cacheRead() && cacheRead().savedAt) || null;
+    paintOffline();
+    if (syncKind !== 'off') setSync('off');
+  }
+  function clearOffline() {
+    if (!state.offline) return;
+    state.offline = false;
+    paintOffline();
   }
 
   function setSync(kind, text) {
@@ -859,6 +989,7 @@
     try {
       trips = (await api('/trips')).trips;
       state.trips = trips;
+      cacheSaveList(trips);
     } catch { /* 목록 실패해도 현재 여행으로 */ }
     const rows = trips.map((t) => `
       <button class="list-row ${state.trip && t.id === state.trip.id ? 'is-on' : ''}" data-act="switch-trip" data-id="${t.id}">
@@ -1161,6 +1292,7 @@
             <span class="hint" style="font-size:11.5px;font-weight:400">마지막 ${lastSyncLabel()}</span>
           </div>
           <div class="note">한쪽 폰에서 지출·일정을 바꾸면 다른 폰에 5초 안에 반영돼요. 입력하던 화면은 방해하지 않아요.</div>
+          <div class="note">인터넷이 없을 때도 마지막으로 저장한 내용을 볼 수 있어요. 여행을 삭제하면 폰에 저장된 그 여행도 함께 지워지고, 입장 비밀번호를 바꾸면 폰 저장 내용도 지워져요.</div>
         </section>
       </div>
 
@@ -1293,8 +1425,10 @@
       confirmLabel: '삭제',
       onConfirm: async () => {
         await api(`/trips/${t.id}`, { method: 'DELETE' });
+        cacheRemoveTrip(t.id); // 폰에 저장해 둔 이 여행도 바로 지운다
         const list = (await api('/trips')).trips;
         state.trips = list;
+        cacheSaveList(list);
         closeSheet();
         if (list.length) {
           applyTrip(await api(`/trips/${list[0].id}`));
@@ -1685,14 +1819,16 @@
   // ── 동기화 ───────────────────────────────────────────────
   let pollTimer = null;
   let pollingStarted = false;
+  let syncingOnline = false;
   async function syncNow() {
     if (!state.trip || state.syncing || document.hidden || state.sheetOpen || lock.open) return;
     state.syncing = true;
-    setSync('syncing');
+    if (syncKind !== 'off') setSync('syncing');
     try {
       const data = await api(`/trips/${state.trip.id}/poll?version=${state.version}`);
       if (data && data.unchanged === true) {
         setSync('ok');
+        clearOffline();
       } else if (data && data.id) {
         applyTrip(data, { soft: true });
       }
@@ -1701,14 +1837,36 @@
         toast('이 여행이 삭제되었어요.', true);
         const list = (await api('/trips').catch(() => ({ trips: [] }))).trips;
         state.trips = list;
+        cacheSaveList(list);
         if (list.length) applyTrip(await api(`/trips/${list[0].id}`));
         else { resetToEmpty(); setTimeout(openNewTripSheet, 320); }
+      } else if (err.offline) {
+        markOffline();
       } else {
         setSync('off');
       }
     } finally {
       state.syncing = false;
     }
+  }
+
+  // 다시 온라인이 되면 목록·현재 여행을 서버 기준으로 맞추고 배지를 지운다.
+  async function resyncAfterOnline() {
+    if (syncingOnline) return;
+    syncingOnline = true;
+    try {
+      if (!state.trip) {
+        if (state.offline) await startApp();
+        return;
+      }
+      const { trips } = await api('/trips');
+      state.trips = trips;
+      cacheSaveList(trips); // 서버 목록과 폰 저장 목록을 똑같이 맞춘다
+    } catch { /* 아직 불안정하면 다음 폴링에서 다시 시도 */ }
+    finally {
+      syncingOnline = false;
+    }
+    await syncNow();
   }
 
   function startPolling() {
@@ -1718,8 +1876,8 @@
     pollTimer = setInterval(syncNow, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) syncNow(); });
     window.addEventListener('focus', () => syncNow());
-    window.addEventListener('online', () => syncNow());
-    window.addEventListener('offline', () => setSync('off'));
+    window.addEventListener('online', () => { resyncAfterOnline(); });
+    window.addEventListener('offline', () => markOffline());
   }
 
   async function refreshNow() {
@@ -1798,6 +1956,40 @@
 
   // ── 시작 ─────────────────────────────────────────────────
   // PIN 잠금을 통과한 뒤(또는 잠금이 없을 때) 실제 데이터를 불러온다.
+  // 인터넷이 끊겨 있으면 폰에 저장해 둔 마지막 내용으로 바로 연다.
+  function finishBoot() {
+    startPolling();
+    if ('serviceWorker' in navigator) {
+      // startApp()의 비동기 작업 뒤에는 'load'가 이미 지나갔을 수 있어, 늦지 않게 바로 등록한다.
+      const registerSw = () => navigator.serviceWorker.register('/sw.js').catch(() => {});
+      if (document.readyState === 'complete') registerSw();
+      else window.addEventListener('load', registerSw, { once: true });
+    }
+  }
+
+  function showOfflineNotice() {
+    $('#tripName').textContent = '오프라인 상태예요';
+    $('#tripMeta').textContent = '인터넷이 연결되면 다시 불러올게요';
+    markOffline();
+    $('#view').innerHTML = `<section class="card empty"><div class="emo">📶</div><div class="t">오프라인 상태예요</div><div class="s">인터넷이 연결되면 다시 열어 주세요. 잠금을 한 번 푼 기기라면 저장해 둔 여행을 바로 볼 수 있어요.</div><div style="margin-top:12px"><button class="btn primary" onclick="location.reload()">다시 시도</button></div></section>`;
+  }
+
+  // 폰에 저장해 둔 내용으로 화면을 그린다(오프라인 모드).
+  function openFromCache(cached, prefer) {
+    const trips = (cached && Array.isArray(cached.trips)) ? cached.trips : [];
+    if (!trips.length) { showOfflineNotice(); return false; }
+    state.trips = trips;
+    state.offlineSavedAt = cached.savedAt || null;
+    const want = String(prefer || '');
+    let target = trips.find((t) => t.code === want.toUpperCase() || t.id === want) || trips[0] || null;
+    if (!target) { showOfflineNotice(); return false; }
+    const full = (cached.tripsById || {})[target.id];
+    if (!full) { showOfflineNotice(); return false; }
+    state.offline = true;
+    applyTrip(full, { fromCache: true });
+    return true;
+  }
+
   async function startApp() {
     renderTabs();
     let entryCode = null;
@@ -1809,57 +2001,83 @@
 
     try {
       state.meta = await api('/meta');
-    } catch { /* 기본값 유지 */ }
+      cacheSaveMeta(state.meta);
+    } catch (err) {
+      const cached = cacheRead();
+      if (err.offline && cached && cached.meta) state.meta = { ...state.meta, ...cached.meta };
+    }
 
+    let trips;
     try {
-      const { trips } = await api('/trips');
+      ({ trips } = await api('/trips'));
       state.trips = trips;
-      let target = null;
-      if (entryCode) target = trips.find((t) => t.code === entryCode) || null;
-      if (!target) {
-        // 코드로 못 찾으면 전체 여행에서 코드 검색
-        if (entryCode) {
-          for (const s of trips) {
-            try {
-              const full = await api(`/trips/${s.id}`);
-              if (full.code === entryCode) { target = s; break; }
-            } catch { /* skip */ }
-          }
+      // 서버 목록과 폰 저장 목록을 똑같이 맞춘다 — 다른 기기에서 지운 여행은 폰에서도 사라진다
+      cacheSaveList(trips);
+    } catch (err) {
+      if (err.status === 401) return; // 잠금 화면이 이미 떠 있음
+      const cached = cacheRead();
+      if (err.offline && cached && cached.trips.length) openFromCache(cached, entryCode || last);
+      else if (err.offline) showOfflineNotice();
+      else {
+        $('#view').innerHTML = `<section class="card empty"><div class="emo">😢</div><div class="t">불러오지 못했어요</div><div class="s">${esc(err.message)}</div><div style="margin-top:12px"><button class="btn primary" onclick="location.reload()">다시 시도</button></div></section>`;
+        setSync('off');
+      }
+      finishBoot();
+      return;
+    }
+
+    let target = null;
+    if (entryCode) target = trips.find((t) => t.code === entryCode) || null;
+    if (!target) {
+      // 코드로 못 찾으면 전체 여행에서 코드 검색
+      if (entryCode) {
+        for (const s of trips) {
+          try {
+            const full = await api(`/trips/${s.id}`);
+            if (full.code === entryCode) { target = s; break; }
+          } catch { /* skip */ }
         }
       }
-      if (!target && last) target = trips.find((t) => t.code === last) || null;
-      if (!target) target = trips[0] || null;
+    }
+    if (!target && last) target = trips.find((t) => t.code === last) || null;
+    if (!target) target = trips[0] || null;
 
-      if (target) {
+    if (target) {
+      try {
         applyTrip(await api(`/trips/${target.id}`));
-      } else {
-        resetToEmpty();
-        openNewTripSheet();
+      } catch (err) {
+        if (err.status === 401) return;
+        const cached = cacheRead();
+        if (err.offline && cached && (cached.tripsById || {})[target.id]) openFromCache(cached, target.code);
+        else if (err.offline) showOfflineNotice();
+        else {
+          $('#view').innerHTML = `<section class="card empty"><div class="emo">😢</div><div class="t">불러오지 못했어요</div><div class="s">${esc(err.message)}</div><div style="margin-top:12px"><button class="btn primary" onclick="location.reload()">다시 시도</button></div></section>`;
+          setSync('off');
+        }
       }
-      if (entryCode && !target) toast('그 여행 코드를 찾지 못했어요.');
-    } catch (err) {
-      if (err.status === 401 && err.data && err.data.code === 'PIN_REQUIRED') return; // 잠금 화면이 이미 떠 있음
-      $('#view').innerHTML = `<section class="card empty"><div class="emo">😢</div><div class="t">불러오지 못했어요</div><div class="s">${esc(err.message)}</div><div style="margin-top:12px"><button class="btn primary" onclick="location.reload()">다시 시도</button></div></section>`;
-      setSync('off');
+    } else {
+      resetToEmpty();
+      openNewTripSheet();
     }
+    if (entryCode && !target) toast('그 여행 코드를 찾지 못했어요.');
 
-    startPolling();
-
-    if ('serviceWorker' in navigator) {
-      // startApp()의 비동기 작업 뒤에는 'load'가 이미 지나갔을 수 있어, 늦지 않게 바로 등록한다.
-      const registerSw = () => navigator.serviceWorker.register('/sw.js').catch(() => {});
-      if (document.readyState === 'complete') registerSw();
-      else window.addEventListener('load', registerSw, { once: true });
-    }
+    finishBoot();
   }
 
   async function boot() {
     bindGlobal();
     bindLock();
     renderTabs();
+    paintOffline();
     // 입장 비밀번호가 설정된 서버라면 먼저 잠금 화면을 띄운다(정적 파일만 내려오고 여행 데이터는 401).
     const status = await fetchPinStatus();
     state.pinLocked = Boolean(status && status.locked);
+    if (status === undefined) {
+      // 오프라인 — 잠금 여부를 물어볼 수 없다.
+      // 한 번 잠금을 푼 기기(토큰·저장 내용 있음)면 잠금 화면으로 막지 않고 저장해 둔 내용으로 연다.
+      await startApp();
+      return;
+    }
     if (status && status.locked && !status.unlocked) {
       openLock();
       return;

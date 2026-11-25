@@ -560,6 +560,29 @@ a { color: var(--sky-d); }
 .sync.is-syncing .sync-dot { background: #b07d16; box-shadow: 0 0 0 3px rgba(176, 125, 22, 0.16); }
 .sync.is-off .sync-dot { background: var(--rose); box-shadow: 0 0 0 3px rgba(178, 58, 91, 0.16); }
 
+/* ── 오프라인 안내 바 ─────────────────────── */
+.offline-bar {
+  display: flex; align-items: center; gap: 7px;
+  margin: 0 14px;
+  padding: 7px 11px;
+  border-radius: 0 0 var(--r-sm) var(--r-sm);
+  background: #FFF6E3;
+  border: 1px solid #F4E3BC;
+  border-top: 0;
+  color: #8A6A15;
+  font-size: 11.5px;
+  font-weight: 400;
+  letter-spacing: -0.01em;
+  box-shadow: 0 2px 6px rgba(138, 106, 21, 0.06);
+}
+.offline-bar[hidden] { display: none !important; }
+.offline-dot {
+  width: 6px; height: 6px; border-radius: 50%; flex: none;
+  background: #C79A2E; box-shadow: 0 0 0 3px rgba(199, 154, 46, 0.16);
+}
+.offline-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.offline-when { flex: none; opacity: 0.72; font-size: 11px; }
+
 /* ── 시트 ─────────────────────────────────── */
 .sheet-layer { position: fixed; inset: 0; z-index: 60; pointer-events: none; }
 .sheet-layer.is-open { pointer-events: auto; }
