@@ -70,10 +70,10 @@
     </button>
   </header>
 
-  <!-- 오프라인일 때만 조용히 뜨는 안내 바 -->
+  <!-- 오프라인일 때, 또는 데이터 아끼기(수동 동기화)일 때 조용히 뜨는 안내 바 -->
   <div class="offline-bar" id="offlineBar" role="status" aria-live="polite" aria-hidden="true" hidden>
     <span class="offline-dot" aria-hidden="true"></span>
-    <span class="offline-text">오프라인 모드 · 마지막 저장 내용 표시 중</span>
+    <span class="offline-text" id="offlineText">오프라인 모드 · 마지막 저장 내용 표시 중</span>
     <span class="offline-when" id="offlineWhen"></span>
   </div>
 

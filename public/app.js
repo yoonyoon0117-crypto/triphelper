@@ -7,6 +7,8 @@
   const LS_PIN = 'trip-helper:pin-token';
   // 오프라인에서도 마지막 내용을 볼 수 있게 여행 목록·상세를 폰에 저장하는 키
   const LS_OFFLINE = 'triphelper_offline_cache_v1';
+  // 데이터 아끼기(수동 동기화) — 기기별로 기억하는 스위치. 켜 두면 5초 자동 확인을 멈춘다.
+  const LS_DATA_SAVER = 'triphelper_data_saver_v1';
   const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
   // 트렌디한 파스텔 틴트 팔레트 — 배경 / 은은한 테두리 / 선명한 포인트 글자
   const PALETTE = [
@@ -35,6 +37,7 @@
     pinLocked: false,
     offline: false,
     offlineSavedAt: null,
+    dataSaver: false,
     showPastDays: false,
     meta: { currencies: ['EUR', 'USD', 'JPY', 'GBP', 'THB', 'VND', 'TWD', 'SGD', 'AUD', 'CAD', 'CNY'] },
   };
@@ -458,10 +461,13 @@
     const url = `/t/${trip.code}`;
     if (location.pathname !== url) history.replaceState({}, '', url);
     if (fromCache) {
-      markOffline(state.offlineSavedAt);
+      // 저장해 둔 내용으로 그린 경우 — 인터넷이 끊긴 게 아니라면(데이터 아끼기) 조용한 배지를 그대로 둔다
+      if (state.offline) markOffline(state.offlineSavedAt);
+      else paintOffline();
     } else {
       setSync('ok');
       clearOffline();
+      if (state.dataSaver) paintOffline(); // 마지막 저장 시각을 새로 찍는다
     }
   }
 
@@ -471,13 +477,27 @@
     if (!at) return '';
     try { return `${new Date(at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })} 저장분`; } catch { return ''; }
   }
+  // 데이터 아끼기 — 폰에 마지막으로 저장한 시각 + 새로고침(↻)은 직접 누를 때만 맞춘다는 안내
+  function saverWhenLabel() {
+    const at = (cacheRead() && cacheRead().savedAt) || state.offlineSavedAt;
+    const time = (() => {
+      if (!at) return '';
+      try { return new Date(at).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' }); } catch { return ''; }
+    })();
+    return time ? `${time} 저장 · ↻` : '↻ 직접 새로고침';
+  }
   function paintOffline() {
     const bar = $('#offlineBar');
     if (!bar) return;
-    bar.hidden = !state.offline;
-    bar.setAttribute('aria-hidden', state.offline ? 'false' : 'true');
+    const offline = Boolean(state.offline);
+    const saver = !offline && Boolean(state.dataSaver);
+    bar.hidden = !(offline || saver);
+    bar.setAttribute('aria-hidden', offline || saver ? 'false' : 'true');
+    bar.classList.toggle('is-saver', saver);
+    const text = $('#offlineText');
+    if (text) text.textContent = offline ? '오프라인 모드 · 마지막 저장 내용 표시 중' : '데이터 아끼기 · 수동 동기화';
     const when = $('#offlineWhen');
-    if (when) when.textContent = state.offline ? offlineWhenLabel() : '';
+    if (when) when.textContent = offline ? offlineWhenLabel() : (saver ? saverWhenLabel() : '');
   }
   function markOffline(savedAt) {
     state.offline = true;
@@ -493,8 +513,9 @@
   }
 
   function setSync(kind, text) {
+    if (kind === 'ok' && state.dataSaver) kind = 'saver';
     syncKind = kind;
-    syncText = text || (kind === 'syncing' ? '맞추는 중' : kind === 'off' ? '오프라인' : '자동 동기화');
+    syncText = text || (kind === 'syncing' ? '맞추는 중' : kind === 'off' ? '오프라인' : kind === 'saver' ? '수동 동기화' : '자동 동기화');
     paintSync();
   }
   function paintSync() {
@@ -503,6 +524,7 @@
     if (!el || !txt) return; // 동기화 표시는 설정 탭에 있어요
     el.classList.toggle('is-syncing', syncKind === 'syncing');
     el.classList.toggle('is-off', syncKind === 'off');
+    el.classList.toggle('is-saver', syncKind === 'saver');
     txt.textContent = syncText;
   }
 
@@ -1466,12 +1488,19 @@
       </div>
 
       <div class="settings-block">
-        <div class="section-title"><h3>자동 동기화</h3><span class="hint">5초마다</span></div>
+        <div class="section-title"><h3>자동 동기화</h3><span class="hint" id="autoSyncHint">${state.dataSaver ? '수동' : '5초마다'}</span></div>
         <section class="card card-pad" style="display:flex;flex-direction:column;gap:9px">
           <div class="row-between">
-            <span class="sync" id="syncBadge"><span class="sync-dot"></span><span id="syncText">자동 동기화</span></span>
+            <span class="sync" id="syncBadge"><span class="sync-dot"></span><span id="syncText">${state.dataSaver ? '수동 동기화' : '자동 동기화'}</span></span>
             <span class="hint" style="font-size:11.5px;font-weight:400">마지막 ${lastSyncLabel()}</span>
           </div>
+          <button class="toggle-row${state.dataSaver ? ' is-on' : ''}" id="dataSaverToggle" type="button" role="switch" aria-checked="${state.dataSaver ? 'true' : 'false'}" data-act="toggle-data-saver">
+            <span class="toggle-copy">
+              <span class="toggle-title">데이터 아끼기 (수동 동기화)</span>
+              <span class="toggle-sub">${state.dataSaver ? '5초 자동 확인을 멈췄어요. 오른쪽 위 ↻나 저장할 때만 서버와 주고받아요.' : '끄면 5초마다 자동으로 맞추고, 켜면 데이터를 아껴요.'}</span>
+            </span>
+            <span class="switch" aria-hidden="true"></span>
+          </button>
           <div class="note">한쪽 폰에서 지출·일정을 바꾸면 다른 폰에 5초 안에 반영돼요. 입력하던 화면은 방해하지 않아요.</div>
           <div class="note">인터넷이 없을 때도 마지막으로 저장한 내용을 볼 수 있어요. 여행을 삭제하면 폰에 저장된 그 여행도 함께 지워지고, 입장 비밀번호를 바꾸면 폰 저장 내용도 지워져요.</div>
         </section>
@@ -2019,7 +2048,9 @@
   let pollTimer = null;
   let pollingStarted = false;
   let syncingOnline = false;
-  async function syncNow() {
+  async function syncNow({ force = false } = {}) {
+    // 데이터 아끼기 중에는 스스로 서버에 묻지 않는다 — 직접 새로고침·저장(force/별도 api 호출)만 통신
+    if (state.dataSaver && !force) return;
     if (!state.trip || state.syncing || document.hidden || state.sheetOpen || lock.open) return;
     state.syncing = true;
     if (syncKind !== 'off') setSync('syncing');
@@ -2051,6 +2082,7 @@
 
   // 다시 온라인이 되면 목록·현재 여행을 서버 기준으로 맞추고 배지를 지운다.
   async function resyncAfterOnline() {
+    if (state.dataSaver) return; // 데이터 아끼기 — 연결이 돌아와도 직접 누를 때까지 쉰다
     if (syncingOnline) return;
     syncingOnline = true;
     try {
@@ -2068,15 +2100,66 @@
     await syncNow();
   }
 
+  // 5초 자동 확인 타이머만 켜고 끈다(이벤트 리스너는 한 번만 등록).
+  function applyPollTimer() {
+    clearInterval(pollTimer);
+    pollTimer = null;
+    if (!pollingStarted || state.dataSaver) return;
+    pollTimer = setInterval(syncNow, 5000);
+  }
+
   function startPolling() {
     if (pollingStarted) return;
     pollingStarted = true;
-    clearInterval(pollTimer);
-    pollTimer = setInterval(syncNow, 5000);
     document.addEventListener('visibilitychange', () => { if (!document.hidden) syncNow(); });
     window.addEventListener('focus', () => syncNow());
     window.addEventListener('online', () => { resyncAfterOnline(); });
     window.addEventListener('offline', () => markOffline());
+    applyPollTimer();
+  }
+
+  // ── 데이터 아끼기(수동 동기화) 스위치 ─────────────────────
+  const dataSaverStored = () => {
+    try { return localStorage.getItem(LS_DATA_SAVER) === '1'; } catch { return false; }
+  };
+
+  function paintSaverToggle() {
+    const btn = $('#dataSaverToggle');
+    if (btn) {
+      btn.classList.toggle('is-on', state.dataSaver);
+      btn.setAttribute('aria-checked', state.dataSaver ? 'true' : 'false');
+      const sub = btn.querySelector('.toggle-sub');
+      if (sub) sub.textContent = state.dataSaver
+        ? '5초 자동 확인을 멈췄어요. 오른쪽 위 ↻나 저장할 때만 서버와 주고받아요.'
+        : '끄면 5초마다 자동으로 맞추고, 켜면 데이터를 아껴요.';
+    }
+    const hint = $('#autoSyncHint');
+    if (hint) hint.textContent = state.dataSaver ? '수동' : '5초마다';
+  }
+
+  function setDataSaver(on) {
+    const next = Boolean(on);
+    if (next === state.dataSaver) { paintSaverToggle(); return; }
+    state.dataSaver = next;
+    try {
+      if (next) localStorage.setItem(LS_DATA_SAVER, '1');
+      else localStorage.removeItem(LS_DATA_SAVER);
+    } catch { /* 저장 실패해도 이번 방문에는 적용 */ }
+    paintSaverToggle();
+    if (next) {
+      // 켜자마자 5초 자동 확인을 멈춘다(예약된 타이머도 취소).
+      applyPollTimer();
+      if (!state.offline) setSync('saver');
+      paintOffline();
+      toast('데이터 아끼기를 켰어요 · 새로고침할 때만 맞춰요');
+    } else {
+      // 끄면 바로 한 번 서버와 맞추고 5초 자동 동기화로 복귀.
+      setSync('ok');
+      paintOffline();
+      applyPollTimer();
+      toast('자동 동기화로 돌아왔어요');
+      syncNow({ force: true });
+    }
   }
 
   async function refreshNow() {
@@ -2137,6 +2220,7 @@
         case 'bulk-apply': applyBulk(); break;
         case 'new-participant': openParticipantSheet(null); break;
         case 'new-trip': openNewTripSheet(); break;
+        case 'toggle-data-saver': setDataSaver(!state.dataSaver); break;
         case 'switch-trip': {
           api(`/trips/${id}`).then((trip) => {
             state.trip = null;
@@ -2177,7 +2261,8 @@
   }
 
   // 폰에 저장해 둔 내용으로 화면을 그린다(오프라인 모드).
-  function openFromCache(cached, prefer) {
+  // mode='saver' 는 데이터 아끼기 — 서버에 묻지 않고 저장해 둔 내용으로 바로 연다(오프라인이 아니라서 배지는 ‘수동 동기화’).
+  function openFromCache(cached, prefer, mode = 'offline') {
     const trips = (cached && Array.isArray(cached.trips)) ? cached.trips : [];
     if (!trips.length) { showOfflineNotice(); return false; }
     state.trips = trips;
@@ -2187,7 +2272,8 @@
     if (!target) { showOfflineNotice(); return false; }
     const full = (cached.tripsById || {})[target.id];
     if (!full) { showOfflineNotice(); return false; }
-    state.offline = true;
+    if (mode === 'saver') { state.offline = false; state.dataSaver = true; }
+    else state.offline = true;
     applyTrip(full, { fromCache: true });
     return true;
   }
@@ -2200,6 +2286,16 @@
     const q = new URLSearchParams(location.search).get('trip');
     if (q) entryCode = q.toUpperCase();
     const last = localStorage.getItem(LS_LAST);
+
+    // 데이터 아끼기 — 폰에 저장해 둔 여행이 있으면 서버에 묻지 않고 바로 그린다.
+    // (캐시가 아예 없을 때만 아래 일반 경로로 서버에 한 번 물어본다.)
+    if (state.dataSaver) {
+      const cached = cacheRead();
+      if (cached && cached.trips.length) {
+        if (cached.meta) state.meta = { ...state.meta, ...cached.meta };
+        if (openFromCache(cached, entryCode || last, 'saver')) { finishBoot(); return; }
+      }
+    }
 
     try {
       state.meta = await api('/meta');
@@ -2269,6 +2365,7 @@
   async function boot() {
     bindGlobal();
     bindLock();
+    state.dataSaver = dataSaverStored();
     renderTabs();
     paintOffline();
     // 입장 비밀번호가 설정된 서버라면 먼저 잠금 화면을 띄운다(정적 파일만 내려오고 여행 데이터는 401).

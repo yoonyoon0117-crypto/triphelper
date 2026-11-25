@@ -798,7 +798,7 @@ async function run() {
     return null;
   });
   assert.ok(precachedFonts, '폰트 프리캐시 없음 (오프라인 로드 불가)');
-  assert.equal(precachedFonts.cache, 'trip-helper-v14', `캐시 버전: ${precachedFonts.cache}`);
+  assert.equal(precachedFonts.cache, 'trip-helper-v15', `캐시 버전: ${precachedFonts.cache}`);
   console.log(`   프리캐시: ${precachedFonts.cache} → ${precachedFonts.paths.join(', ')}`);
   const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
   assert.match(viewport, /viewport-fit=cover/);
@@ -959,6 +959,110 @@ async function run() {
   const afterGhost = await offPage.evaluate(() => JSON.parse(localStorage.getItem('triphelper_offline_cache_v1')).trips.map((t) => t.code));
   assert.ok(!afterGhost.includes(ghostTrip.code), '서버에서 사라진 여행은 폰 캐시에서도 사라진다');
   await offCtx.close();
+
+  // ── 9-6. 데이터 아끼기(수동 동기화) ───────────────
+  step('9-6. 데이터 아끼기 — 5초 자동 확인 정지 · 직접 새로고침할 때만 맞춘다');
+  const dsCtx = await browser.newContext({
+    viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true,
+    locale: 'ko-KR', timezoneId: 'Asia/Seoul',
+  });
+  const dsPage = await dsCtx.newPage();
+  dsPage.setDefaultTimeout(15000);
+  dsPage.on('pageerror', (e) => errors.push(`datasaver pageerror: ${e.message}`));
+  dsPage.on('console', (m) => { if (m.type() === 'error') errors.push(`datasaver console: ${m.text()}`); });
+  let pollHits = 0;
+  dsPage.on('request', (r) => {
+    try { if (/\/api\/trips\/[^/]+\/poll$/.test(new URL(r.url()).pathname)) pollHits += 1; } catch { /* ignore */ }
+  });
+
+  // 데이터 아끼기는 기기별 스위치 — 처음에는 꺼져 있고 5초 폴링이 돈다
+  await dsPage.goto(`${base}/t/${tripBefore.code}`, { waitUntil: 'networkidle' });
+  await dsPage.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'));
+  await dsPage.click('#tabbar .tab[data-tab="settings"]');
+  await dsPage.waitForSelector('#dataSaverToggle');
+  assert.equal(await dsPage.getAttribute('#dataSaverToggle', 'aria-checked'), 'false', '기본은 꺼짐(자동 동기화)');
+  assert.equal(await dsPage.evaluate(() => localStorage.getItem('triphelper_data_saver_v1')), null);
+  pollHits = 0;
+  await dsPage.waitForTimeout(5500);
+  assert.ok(pollHits >= 1, `자동 동기화 중에는 5초 폴링이 돈다: ${pollHits}건`);
+
+  // ON — 스위치·저장 키·상단 배지
+  await dsPage.click('#dataSaverToggle');
+  await dsPage.waitForTimeout(300);
+  assert.equal(await dsPage.getAttribute('#dataSaverToggle', 'aria-checked'), 'true', '스위치 ON');
+  assert.equal(await dsPage.evaluate(() => localStorage.getItem('triphelper_data_saver_v1')), '1', '기기별 localStorage 에 저장');
+  await dsPage.waitForFunction(() => document.querySelector('#offlineBar') && !document.querySelector('#offlineBar').hidden, null, { timeout: 5000 });
+  assert.match(await dsPage.textContent('#offlineBar'), /데이터 아끼기 · 수동 동기화/, '상단 배지');
+  assert.match(await dsPage.textContent('#offlineWhen'), /\d{2}:\d{2} 저장/, '마지막 저장 시각');
+  assert.match(await dsPage.textContent('#syncText'), /수동 동기화/, '설정 탭 배지도 수동 동기화');
+  await shot(dsPage, '21-data-saver-on.png');
+
+  // 다른 곳에서 지출을 넣어도 6초 동안 폴링 0건 · 화면에 자동 반영되지 않는다
+  pollHits = 0;
+  const dsTripNow = (await api(`/api/trips/${tripBefore.id}`)).data;
+  const dsPost = await fetch(`${base}/api/trips/${tripBefore.id}/expenses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: '데이터 아끼기 확인', amount: 7, currency: 'local', payerId: dsTripNow.participants[0].id, split: { mode: 'even' }, date: '2026-12-22' }),
+  });
+  assert.equal(dsPost.status, 201, '다른 기기(API)에서 지출 저장');
+  await dsPage.click('#tabbar .tab[data-tab="settle"]');
+  await dsPage.waitForTimeout(6200);
+  assert.equal(pollHits, 0, `데이터 아끼기 중 폴링 요청 0건 (실제 ${pollHits}건)`);
+  assert.doesNotMatch(await dsPage.textContent('#view'), /데이터 아끼기 확인/, '자동으로 반영되지 않는다(데이터 절약)');
+
+  // 오른쪽 위 새로고침(↻)을 직접 누르면 서버에서 최신 지출이 바로 반영 + 캐시 갱신
+  await dsPage.click('#btnRefresh');
+  await dsPage.waitForFunction(() => document.querySelector('#view').textContent.includes('데이터 아끼기 확인'), null, { timeout: 12000 });
+  assert.match(await dsPage.textContent('#toast'), /최신 상태로 불러왔어요/);
+  assert.equal(pollHits, 0, '직접 새로고침은 폴링이 아니라 1회 조회');
+  const dsCache = await dsPage.evaluate(() => {
+    const c = JSON.parse(localStorage.getItem('triphelper_offline_cache_v1') || 'null');
+    if (!c) return null;
+    const summary = (c.trips || []).find((t) => String(t.name || '').includes('스페인'));
+    const full = summary ? (c.tripsById || {})[summary.id] : null;
+    return { savedAt: c.savedAt, titles: ((full && full.expenses) || []).map((e) => e.title) };
+  });
+  assert.ok(dsCache && dsCache.savedAt, '폰 캐시 유지');
+  assert.ok(dsCache.titles.includes('데이터 아끼기 확인'), '직접 새로고침하면 폰 캐시도 최신으로 갱신');
+  await shot(dsPage, '22-data-saver-refresh.png');
+
+  // 새로고침(reload) — 캐시가 있으면 서버에 먼저 묻지 않고 바로 열린다
+  let tripGets = 0;
+  const countTripGets = (r) => {
+    try { if (new URL(r.url()).pathname.startsWith('/api/trips')) tripGets += 1; } catch { /* ignore */ }
+  };
+  dsPage.on('request', countTripGets);
+  await dsPage.reload({ waitUntil: 'domcontentloaded' });
+  await dsPage.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'), null, { timeout: 12000 });
+  await dsPage.click('#tabbar .tab[data-tab="settle"]');
+  await dsPage.waitForFunction(() => document.querySelector('#view').textContent.includes('데이터 아끼기 확인'), null, { timeout: 12000 });
+  await dsPage.waitForTimeout(400);
+  dsPage.off('request', countTripGets);
+  assert.equal(tripGets, 0, `캐시로 바로 열린다 — 여행 데이터 요청 ${tripGets}건`);
+  assert.match(await dsPage.textContent('#offlineBar'), /데이터 아끼기 · 수동 동기화/, '새로고침 뒤에도 배지 유지');
+
+  // OFF — 키를 지우고 5초 자동 동기화로 복귀(다른 곳에서 넣은 지출이 저절로 들어온다)
+  await dsPage.click('#tabbar .tab[data-tab="settings"]');
+  await dsPage.waitForSelector('#dataSaverToggle');
+  await dsPage.click('#dataSaverToggle');
+  await dsPage.waitForTimeout(300);
+  assert.equal(await dsPage.getAttribute('#dataSaverToggle', 'aria-checked'), 'false', '스위치 OFF');
+  assert.equal(await dsPage.evaluate(() => localStorage.getItem('triphelper_data_saver_v1')), null, '기기 저장값 삭제');
+  await dsPage.waitForFunction(() => document.querySelector('#offlineBar').hidden, null, { timeout: 5000 });
+  pollHits = 0;
+  const dsTripNow2 = (await api(`/api/trips/${tripBefore.id}`)).data;
+  const dsPost2 = await fetch(`${base}/api/trips/${tripBefore.id}/expenses`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: '자동 동기화 복귀 확인', amount: 3, currency: 'local', payerId: dsTripNow2.participants[0].id, split: { mode: 'even' }, date: '2026-12-23' }),
+  });
+  assert.equal(dsPost2.status, 201);
+  await dsPage.click('#tabbar .tab[data-tab="settle"]');
+  await dsPage.waitForFunction(() => document.querySelector('#view').textContent.includes('자동 동기화 복귀 확인'), null, { timeout: 12000 });
+  assert.ok(pollHits >= 1, `자동 동기화 복귀 — 5초 폴링 ${pollHits}건`);
+  await shot(dsPage, '23-data-saver-off.png');
+  await dsCtx.close();
 
   // ── 9-1. 마지막 여행 삭제 → 새 여행 안내 ─────
   step('9-1. 여행을 모두 지우면 새 여행 안내');

@@ -619,6 +619,32 @@ a { color: var(--sky-d); }
 .sync-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--aqua); box-shadow: 0 0 0 3px rgba(23, 117, 99, 0.14); }
 .sync.is-syncing .sync-dot { background: #b07d16; box-shadow: 0 0 0 3px rgba(176, 125, 22, 0.16); }
 .sync.is-off .sync-dot { background: var(--rose); box-shadow: 0 0 0 3px rgba(178, 58, 91, 0.16); }
+.sync.is-saver .sync-dot { background: #2f8fa8; box-shadow: 0 0 0 3px rgba(47, 143, 168, 0.16); }
+
+/* ── 설정: 스위치(데이터 아끼기) ────────────── */
+.toggle-row {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; border-radius: var(--r-sm);
+  background: #fbfdff; border: 1px solid var(--line-soft);
+  text-align: left; cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.toggle-row.is-on { background: var(--aqua-soft); border-color: #c4eadd; }
+.toggle-copy { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.toggle-title { font-size: 12.5px; font-weight: 500; color: var(--ink); }
+.toggle-sub { font-size: 11px; font-weight: 400; color: var(--ink-3); line-height: 1.42; }
+.switch {
+  flex: none; position: relative; width: 40px; height: 23px; border-radius: 999px;
+  background: #e6e1d5; border: 1px solid #dcd6c8;
+  transition: background 0.18s ease, border-color 0.18s ease;
+}
+.switch::after {
+  content: ''; position: absolute; top: 2px; left: 2px; width: 17px; height: 17px;
+  border-radius: 50%; background: #fff; box-shadow: 0 1px 3px rgba(35, 40, 50, 0.18);
+  transition: transform 0.18s ease;
+}
+.toggle-row.is-on .switch { background: #1d8f72; border-color: #177563; }
+.toggle-row.is-on .switch::after { transform: translateX(17px); }
 
 /* ── 오프라인 안내 바 ─────────────────────── */
 .offline-bar {
@@ -642,6 +668,14 @@ a { color: var(--sky-d); }
 }
 .offline-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .offline-when { flex: none; opacity: 0.72; font-size: 11px; }
+/* 데이터 아끼기(수동 동기화) — 오프라인과 구분되는 조용한 민트 톤 */
+.offline-bar.is-saver {
+  background: #EFF9F4;
+  border-color: #CDEADC;
+  color: #177563;
+  box-shadow: 0 2px 6px rgba(23, 117, 99, 0.06);
+}
+.offline-bar.is-saver .offline-dot { background: #2f8fa8; box-shadow: 0 0 0 3px rgba(47, 143, 168, 0.16); }
 
 /* ── 시트 ─────────────────────────────────── */
 .sheet-layer { position: fixed; inset: 0; z-index: 60; pointer-events: none; }
