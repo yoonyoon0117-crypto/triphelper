@@ -161,6 +161,7 @@ try {
   await page.waitForSelector('#rateNaver');
   await sleep(500);
   await shots('03c-환율-네이버.png');
+  await sleep(2700); // 토스트가 사라진 뒤 다음 화면 촬영
 
   await page.click('#tabbar .tab[data-tab="settings"]');
   await page.waitForSelector('#stName');
