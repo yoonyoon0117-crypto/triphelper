@@ -1,7 +1,26 @@
 /* ────────────────────────────────────────────────
    Trip helper✈️ — Cart helper 스타일 (단정한 카드 · 글로시 하늘색 · 미색 바탕)
    iPhone Safari(390×844) 기준, 데스크톱에서는 가운데 정렬
+   폰트: 나눔스퀘어라운드 (로컬 woff2 — 오프라인 PWA에서도 즉시 로드)
    ──────────────────────────────────────────────── */
+
+/* 400·500 = Regular, 600·700 = Bold. 둥근 민무늬 폰트라 한 단계씩 가볍게 매핑해
+   "전부 볼드체 같던" 느낌을 줄인다. */
+@font-face {
+  font-family: 'NanumSquareRound';
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: swap;
+  src: url('/fonts/NanumSquareRoundR.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'NanumSquareRound';
+  font-style: normal;
+  font-weight: 600 700;
+  font-display: swap;
+  src: url('/fonts/NanumSquareRoundB.woff2') format('woff2');
+}
+
 :root {
   /* 바탕: 깨끗한 미색 */
   --cream: #fffcf4;
@@ -35,7 +54,7 @@
   --card-shadow: 0 1px 2px rgba(20, 20, 40, 0.04), 0 6px 18px rgba(20, 20, 40, 0.05);
   --shadow-soft: 0 1px 2px rgba(20, 20, 40, 0.04), 0 3px 10px rgba(20, 20, 40, 0.04);
   --tabbar-h: 64px;
-  --font: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Noto Sans CJK KR", "Malgun Gothic", system-ui, sans-serif;
+  --font: 'NanumSquareRound', -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
 }
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }

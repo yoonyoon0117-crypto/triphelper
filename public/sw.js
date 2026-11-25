@@ -1,5 +1,5 @@
 /* Trip helper✈️ 서비스워커 — 네트워크 우선, 실패하면 캐시 */
-const CACHE = 'trip-helper-v7';
+const CACHE = 'trip-helper-v8';
 const ASSETS = [
   '/',
   '/index.html',
@@ -9,6 +9,8 @@ const ASSETS = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/apple-touch-icon.png',
+  '/fonts/NanumSquareRoundR.woff2',
+  '/fonts/NanumSquareRoundB.woff2',
 ];
 
 self.addEventListener('install', (event) => {

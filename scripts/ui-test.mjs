@@ -117,7 +117,27 @@ async function run() {
   const barBg = await page.$eval('.appbar', (el) => getComputedStyle(el).backgroundImage);
   assert.match(barBg, /linear-gradient/, '상단 바 글로시 그라데이션');
   const fontFamily = await page.evaluate(() => getComputedStyle(document.body).fontFamily);
-  assert.match(fontFamily, /-apple-system|Apple SD Gothic Neo/, `폰트: ${fontFamily}`);
+  assert.match(fontFamily, /NanumSquareRound/, `본문 폰트: ${fontFamily}`);
+  assert.match(fontFamily, /-apple-system|Apple SD Gothic Neo/, `폰트 폴백: ${fontFamily}`);
+  // 로컬 woff2 실로딩 확인 (regular·bold 둘 다)
+  const fontsReady = await page.evaluate(async () => {
+    await document.fonts.ready;
+    return {
+      regular: document.fonts.check('400 15px NanumSquareRound'),
+      medium: document.fonts.check('500 15px NanumSquareRound'),
+      bold: document.fonts.check('600 15px NanumSquareRound'),
+      faces: [...document.fonts].filter((f) => f.family.replace(/["']/g, '') === 'NanumSquareRound')
+        .map((f) => `${f.weight}:${f.status}`),
+    };
+  });
+  assert.equal(fontsReady.regular, true, `Regular 로드: ${fontsReady.faces.join(',')}`);
+  assert.equal(fontsReady.medium, true, `Medium 로드: ${fontsReady.faces.join(',')}`);
+  assert.equal(fontsReady.bold, true, `Bold 로드: ${fontsReady.faces.join(',')}`);
+  assert.match(fontsReady.faces.join(','), /400[^,]*:loaded/, `Regular 실제 로드됨: ${fontsReady.faces.join(',')}`);
+  assert.match(fontsReady.faces.join(','), /600[^,]*:loaded/, `Bold 실제 로드됨: ${fontsReady.faces.join(',')}`);
+  const fontReq = await page.evaluate(() => performance.getEntriesByType('resource')
+    .filter((e) => e.name.includes('/fonts/')).map((e) => `${e.name.split('/').pop()}:${Math.round(e.transferSize / 1024)}KB`));
+  console.log(`   폰트: ${fontsReady.faces.join(', ')} / ${fontReq.join(', ')}`);
   const tabbarPos = await page.$eval('#tabbar', (el) => getComputedStyle(el).position);
   assert.equal(tabbarPos, 'fixed', '하단 탭 바 고정');
 

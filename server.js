@@ -339,6 +339,8 @@ function createApp(store) {
     express.static(PUBLIC_DIR, {
       setHeaders(res, filePath) {
         if (filePath.endsWith('sw.js') || filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+        // 폰트는 내용이 바뀌지 않으므로 길게 캐시(파일명이 곧 버전)
+        else if (filePath.includes(`${path.sep}fonts${path.sep}`)) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
       },
     })
   );
