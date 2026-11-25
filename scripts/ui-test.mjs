@@ -445,6 +445,99 @@ async function run() {
   await page.waitForTimeout(250);
   assert.match(await page.getAttribute('#tabbar .tab[data-tab="rate"]', 'class'), /is-active/, '배지를 누르면 환율 탭');
 
+  // ── 5-2. 여행 중 — 지난 일정 접기 · 오늘 일정 맨 위 ────────
+  step('5-2. 여행 중 — 지난 Day 1 숨김 · 오늘 Day 2 맨 위 · 토글로 다시 보기');
+  // 기기(브라우저 컨텍스트) 시간대는 Asia/Seoul — 오늘이 여행 2일차인 여행을 만든다
+  const kstDate = (offset) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(Date.now() + offset * 86400000));
+  const liveTrip = await fetch(`${base}/api/trips`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      name: '🇪🇸 여행 중 테스트', startDate: kstDate(-1), endDate: kstDate(2),
+      localCurrency: 'EUR', exchangeRate: 1500, template: 'twoFamilies',
+    }),
+  }).then((r) => r.json());
+  assert.ok(liveTrip.id, '여행 중 테스트 여행 생성');
+  for (const [day, place] of [[1, '어제 다녀온 곳'], [2, '오늘 갈 곳'], [3, '내일 갈 곳']]) {
+    const r = await fetch(`${base}/api/trips/${liveTrip.id}/itinerary`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ day, time: '10:00', place }),
+    });
+    assert.equal(r.status, 201, `Day ${day} 일정 생성`);
+  }
+
+  await page.goto(`${base}/t/${liveTrip.code}`, { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('여행 중 테스트'));
+  await page.waitForSelector('#view .day-block');
+  await page.waitForTimeout(400);
+
+  // 지난 Day 1 은 기본으로 숨고, 오늘(Day 2)이 ＋ 일정 추가하기 바로 아래 맨 위
+  const visibleDays = await page.$$eval('#view .day-banner', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
+  assert.equal(visibleDays.length, 2, `보이는 날짜 블록: ${visibleDays.join(' / ')}`);
+  assert.match(visibleDays[0], /^Day 2/, `오늘(Day 2)이 맨 위: ${visibleDays[0]}`);
+  assert.match(visibleDays[0], /오늘/, '오늘 배지');
+  assert.match(visibleDays[1], /^Day 3/, `다음 날: ${visibleDays[1]}`);
+  assert.doesNotMatch(visibleDays[1], /오늘/);
+  const viewNow = await page.textContent('#view');
+  assert.doesNotMatch(viewNow, /어제 다녀온 곳/, '지난 일정은 기본으로 숨김');
+  assert.match(viewNow, /오늘 갈 곳/);
+  assert.match(viewNow, /내일 갈 곳/);
+  const todayBadges = await page.$$eval('#view .day-today', (els) => els.length);
+  assert.equal(todayBadges, 1, '오늘 배지는 하나');
+
+  // ＋ 일정 추가하기 → 오늘 일정 → 내일 일정 → 맨 아래 1줄 토글 순서
+  const planOrder = await page.evaluate(() => {
+    const nodes = [...document.querySelector('#view').children];
+    return {
+      add: nodes.findIndex((n) => n.id === 'btnAdd'),
+      firstDay: nodes.findIndex((n) => n.classList.contains('day-block')),
+      toggle: nodes.findIndex((n) => n.classList.contains('past-toggle')),
+      lastDay: nodes.map((n) => n.classList.contains('day-block')).lastIndexOf(true),
+    };
+  });
+  assert.equal(planOrder.firstDay, planOrder.add + 1, '오늘 일정이 추가 버튼 바로 아래');
+  assert.equal(planOrder.toggle, planOrder.lastDay + 1, '토글은 일정 블록 맨 아래');
+  const toggle = page.locator('#view .past-toggle');
+  assert.match(await toggle.textContent(), /지난 일정 1일 \(1개\)/, '지난 일정 줄 수·개수');
+  assert.match(await toggle.textContent(), /보기 ▾/);
+  assert.equal(await toggle.getAttribute('aria-expanded'), 'false');
+  await shot(page, '09d-plan-today.png');
+
+  // 토글 → 지난 Day 1 이 날짜 순서대로 나타난다
+  await toggle.click();
+  await page.waitForTimeout(350);
+  const openedDays = await page.$$eval('#view .day-banner', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim()));
+  assert.equal(openedDays.length, 3, `펼친 뒤 3일: ${openedDays.join(' / ')}`);
+  assert.match(openedDays[0], /^Day 1/, '펼치면 Day 1 부터 날짜 순서');
+  assert.match(openedDays[1], /^Day 2/);
+  assert.match(await page.textContent('#view'), /어제 다녀온 곳/, '지난 일정이 다시 보인다');
+  const toggleOpen = page.locator('#view .past-toggle');
+  assert.match(await toggleOpen.textContent(), /접기 ▴/);
+  assert.equal(await toggleOpen.getAttribute('aria-expanded'), 'true');
+  await shot(page, '09e-plan-past-open.png');
+
+  // 다시 접으면 오늘 일정만
+  await toggleOpen.click();
+  await page.waitForTimeout(350);
+  assert.equal(await page.$$eval('#view .day-block', (els) => els.length), 2, '다시 접힘');
+  assert.doesNotMatch(await page.textContent('#view'), /어제 다녀온 곳/);
+
+  // 테스트 여행은 지워서 이후 단계(여행 개수·전환)에 영향이 없게 한다
+  assert.equal((await fetch(`${base}/api/trips/${liveTrip.id}`, { method: 'DELETE' })).status, 200, '테스트 여행 삭제');
+
+  // 여행 시작 전(스페인: 12.19~)은 기존과 동일하게 Day 1 부터 전부 보인다
+  await page.goto(`${base}/t/${tripBefore.code}`, { waitUntil: 'networkidle' });
+  await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'));
+  await page.waitForSelector('#view .day-block');
+  await page.waitForTimeout(400);
+  assert.match((await page.$$eval('#view .day-banner', (els) => els.map((e) => e.textContent.replace(/\s+/g, ' ').trim())))[0], /^Day 1/, '여행 전에는 Day 1 부터');
+  assert.equal(await page.$$eval('#view .past-toggle', (els) => els.length), 0, '여행 전에는 지난 일정 토글 없음');
+  assert.equal(await page.$$eval('#view .day-today', (els) => els.length), 0, '여행 전에는 오늘 배지 없음');
+  assert.match(await page.textContent('#view'), /마드리드 바라하스 공항/, '지난 일정도 그대로 표시(시작 전)');
+
   // ── 6. 친구 5명 여행 ─────────────────────────
   step('6. 친구 5명 새 여행 → 5명 균등 + 3명 부분 분담 정산');
   await page.click('#btnTripSwitch');
@@ -598,7 +691,7 @@ async function run() {
     return null;
   });
   assert.ok(precachedFonts, '폰트 프리캐시 없음 (오프라인 로드 불가)');
-  assert.equal(precachedFonts.cache, 'trip-helper-v11', `캐시 버전: ${precachedFonts.cache}`);
+  assert.equal(precachedFonts.cache, 'trip-helper-v12', `캐시 버전: ${precachedFonts.cache}`);
   console.log(`   프리캐시: ${precachedFonts.cache} → ${precachedFonts.paths.join(', ')}`);
   const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
   assert.match(viewport, /viewport-fit=cover/);

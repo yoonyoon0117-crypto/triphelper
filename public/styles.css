@@ -437,6 +437,35 @@ a { color: var(--sky-d); }
 }
 .day-date { font-size: 11.5px; font-weight: 400; color: var(--ink-3); }
 
+/* 오늘 일정 강조 — 배지 옆 '오늘' 칩, 지난 일정 접기/펼치기 1줄 토글 */
+.day-today {
+  display: inline-flex; align-items: center;
+  font-size: 10.5px; font-weight: 600; letter-spacing: -0.01em;
+  color: #fff;
+  background: linear-gradient(180deg, #4db1ec 0%, #1b7ac0 100%);
+  border-radius: 999px; padding: 3px 8px;
+  box-shadow: 0 2px 6px rgba(27, 122, 192, 0.24);
+  white-space: nowrap;
+}
+.day-block.is-today .day-badge { background: var(--sky-d); border-color: var(--sky-d); color: #fff; }
+.past-toggle {
+  width: 100%;
+  display: flex; align-items: center; justify-content: center; gap: 9px;
+  margin: 2px 0;
+  padding: 10px 12px;
+  border-radius: 13px;
+  background: #f5f9fc;
+  border: 1px dashed #d7e6f1;
+  color: var(--ink-3);
+  font-size: 12px; font-weight: 500;
+}
+.past-toggle .past-toggle-state { color: var(--sky-d); }
+.past-toggle:active { background: var(--sky-soft); }
+.plan-note {
+  text-align: center; font-size: 11.5px; color: var(--ink-3);
+  padding: 14px 10px; background: #fbfdfe; border-radius: 13px; border: 1px solid var(--line-soft);
+}
+
 .itn { padding: 13px 14px; display: flex; flex-direction: column; gap: 8px; }
 .itn-top { display: flex; align-items: flex-start; gap: 9px; }
 .itn-time {

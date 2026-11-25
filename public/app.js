@@ -31,6 +31,7 @@
     syncing: false,
     lastSync: null,
     pinLocked: false,
+    showPastDays: false,
     meta: { currencies: ['EUR', 'USD', 'JPY', 'GBP', 'THB', 'VND', 'TWD', 'SGD', 'AUD', 'CAD', 'CNY'] },
   };
 
@@ -76,13 +77,26 @@
     const d = parseD(s);
     return `${d.getUTCMonth() + 1}월 ${d.getUTCDate()}일 (${WEEK[d.getUTCDay()]})`;
   };
-  const todayIso = () => isoOf(new Date());
+  // 기기 로컬 날짜(YYYY-MM-DD) — 해외에서도 폰 시간이 현지로 바뀌므로 현지 날짜와 일치한다.
+  // (toISOString() 은 UTC 기준이라 한국·스페인에서 새벽에 하루 어긋난다.)
+  const todayIso = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
   const dayCount = (trip) => {
     if (!trip || !trip.startDate || !trip.endDate) return 1;
     const diff = Math.round((parseD(trip.endDate) - parseD(trip.startDate)) / 86400000) + 1;
     return Math.max(1, Math.min(60, diff));
   };
   const dayDate = (trip, day) => addDays(trip.startDate, Math.max(0, day - 1));
+  // 여행 기간 중이면 오늘이 몇 일차인지(todayDay) 알려 준다. 시작 전·기간 외에는 null.
+  const tripTodayDay = (trip) => {
+    if (!trip || !trip.startDate || !trip.endDate) return null;
+    const today = todayIso();
+    if (today < trip.startDate || today > trip.endDate) return null;
+    const day = Math.round((parseD(today) - parseD(trip.startDate)) / 86400000) + 1;
+    return Math.min(Math.max(1, day), Math.max(1, dayCount(trip)));
+  };
   const defaultExpenseDate = () => {
     const t = todayIso();
     if (!state.trip) return t;
@@ -337,6 +351,7 @@
     localStorage.setItem(LS_LAST, trip.code);
     renderHeader();
     if (!sameTrip) state.tab = 'plan';
+    if (!sameTrip) state.showPastDays = false;
     if (!sameTrip) { fx.preview = null; fx.local = ''; fx.krw = ''; }
     renderTabs();
     // 설정·환율 탭에서 입력하는 중이면 자동 동기화가 화면(입력값)을 갈아엎지 않게 한다
@@ -733,16 +748,22 @@
           <div class="s">숙소·맛집·예약을 날짜별로 모아 두면<br>이동할 때 지도 버튼 한 번으로 열 수 있어요.</div>
         </section>`;
     }
-    const days = Math.max(dayCount(t), ...items.map((i) => i.day));
     const byDay = new Map();
     for (const it of items) {
       if (!byDay.has(it.day)) byDay.set(it.day, []);
       byDay.get(it.day).push(it);
     }
-    const blocks = [...byDay.entries()].sort((a, b) => a[0] - b[0]).map(([day, list]) => `
-      <div class="day-block fade-in">
+    const ordered = [...byDay.entries()].sort((a, b) => a[0] - b[0]);
+    // 여행 진행 중이면 지난 날 일정은 접어 두고 오늘 일정이 맨 위에 오게 한다.
+    const todayDay = tripTodayDay(t);
+    const past = todayDay ? ordered.filter(([day]) => day < todayDay) : [];
+    const upcoming = todayDay ? ordered.filter(([day]) => day >= todayDay) : ordered;
+    const showPast = Boolean(todayDay && past.length && state.showPastDays);
+    const blockHtml = ([day, list]) => `
+      <div class="day-block fade-in${day === todayDay ? ' is-today' : ''}">
         <div class="day-banner">
           <span class="day-badge">Day ${day}</span>
+          ${day === todayDay ? '<span class="day-today">오늘</span>' : ''}
           <span class="day-date">${mdw(dayDate(t, day))}</span>
         </div>
         ${list.map((it) => `
@@ -763,8 +784,20 @@
               <button class="mini-btn ghost" data-act="itn-to-expense" data-id="${it.id}">＋ 이 일정 지출 기록</button>
             </div>
           </section>`).join('')}
-      </div>`).join('');
-    return `<div class="section-title"><h3>일정</h3><span class="hint">${items.length}개 · ${byDay.size}일</span></div>` + addBtn + blocks;
+      </div>`;
+    const title = `<div class="section-title"><h3>일정</h3><span class="hint">${items.length}개 · ${byDay.size}일</span></div>`;
+    if (!past.length) return title + addBtn + ordered.map(blockHtml).join('');
+
+    const pastCount = past.reduce((n, [, list]) => n + list.length, 0);
+    const toggle = `<button class="past-toggle" data-act="toggle-past" aria-expanded="${showPast ? 'true' : 'false'}">
+        <span>지난 일정 ${past.length}일 (${pastCount}개)</span>
+        <span class="past-toggle-state">${showPast ? '접기 ▴' : '보기 ▾'}</span>
+      </button>`;
+    // 접었을 때: 오늘·앞으로 일정 먼저 → 맨 아래 1줄 토글로 지난 일정 열기
+    // 펼쳤을 때: 날짜 순서대로 전부 + 맨 위 토글로 다시 접기
+    if (showPast) return title + addBtn + toggle + ordered.map(blockHtml).join('');
+    const quiet = upcoming.length ? '' : '<div class="plan-note">오늘 이후 일정이 아직 없어요. 아래에서 지난 일정을 볼 수 있어요.</div>';
+    return title + addBtn + quiet + upcoming.map(blockHtml).join('') + toggle;
   }
 
   function renderView() {
@@ -1727,7 +1760,12 @@
         case 'go-rate':
           if (state.tab !== 'rate') { state.tab = 'rate'; window.scrollTo({ top: 0 }); renderView(); }
           break;
-        case 'add-plan': if (!state.trip) openNewTripSheet(); else openItinerarySheet({ preset: { day: 1 } }); break;
+        case 'add-plan': if (!state.trip) openNewTripSheet(); else openItinerarySheet({ preset: { day: tripTodayDay(state.trip) || 1 } }); break;
+        case 'toggle-past':
+          state.showPastDays = !state.showPastDays;
+          renderView();
+          window.scrollTo({ top: 0 });
+          break;
         case 'delete-trip': confirmDeleteTrip(); break;
         case 'edit-expense': openExpenseSheet({ expenseId: id }); break;
         case 'edit-itinerary': openItinerarySheet({ itemId: id }); break;

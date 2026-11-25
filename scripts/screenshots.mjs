@@ -225,6 +225,34 @@ try {
   await sleep(300);
   await shots('13-새-여행.png');
 
+  // ── 여행 중: 오늘 일정 맨 위 · 지난 일정 접기 ──────
+  const kst = (offset) => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).format(new Date(Date.now() + offset * 86400000));
+  const live = await call('/api/trips', {
+    method: 'POST',
+    body: {
+      name: '🇪🇸 바르셀로나 여행 중', subtitle: '여행 2일차 · 오늘부터 보기',
+      startDate: kst(-1), endDate: kst(3), localCurrency: 'EUR', exchangeRate: 1500, template: 'twoFamilies',
+    },
+  });
+  const livePlans = [
+    { day: 1, time: '09:00', place: '마드리드 왕궁', region: '마드리드', memo: '사전 예약 09:30 · 신분증 지참' },
+    { day: 2, time: '09:00', place: '구엘 공원', region: '바르셀로나', memo: '예약 09:30 · 입구에서 QR 확인' },
+    { day: 2, time: '13:00', place: '보케리아 시장', region: '바르셀로나', memo: '점심 · 아이들 과일 컵 챙기기' },
+    { day: 3, time: '11:00', place: '카사 바트요', region: '바르셀로나', memo: '예약 11:15 · 오디오가이드 포함' },
+  ];
+  for (const it of livePlans) await call(`/api/trips/${live.id}/itinerary`, { method: 'POST', body: it });
+
+  await page.goto(`${base}/t/${live.code}`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#tabbar');
+  await page.click('#tabbar .tab[data-tab="plan"]');
+  await sleep(700);
+  await shots('14-여행중-오늘일정.png');
+  await page.click('#view .past-toggle');
+  await sleep(500);
+  await shots('15-여행중-지난일정-펼침.png');
+
   console.log(`\n✅ 스크린샷 저장: ${OUT}`);
 } finally {
   if (browser) await browser.close().catch(() => {});
