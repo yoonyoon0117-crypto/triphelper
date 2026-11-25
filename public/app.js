@@ -185,10 +185,6 @@
   function cacheClear() {
     try { localStorage.removeItem(LS_OFFLINE); } catch { /* ignore */ }
   }
-  const hasCache = () => {
-    const c = cacheRead();
-    return Boolean(c && c.trips && c.trips.length);
-  };
   const summaryOfTrip = (t) => ({
     id: t.id,
     code: t.code,
