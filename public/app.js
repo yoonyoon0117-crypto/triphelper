@@ -447,6 +447,8 @@
     if (!sameTrip) state.tab = 'plan';
     if (!sameTrip) state.showPastDays = false;
     if (!sameTrip) { fx.preview = null; fx.local = ''; fx.krw = ''; }
+    // 다른 여행으로 바꾸면 붙여넣기 초안도 비운다 (일차는 그 여행 기간으로 계산되므로)
+    if (!sameTrip && bulkDraft.parsed) { bulkDraft.text = ''; bulkDraft.parsed = null; bulkDraft.selected = null; bulkDraft.mode = 'append'; }
     renderTabs();
     // 설정·환율 탭에서 입력하는 중이면 자동 동기화가 화면(입력값)을 갈아엎지 않게 한다
     const focused = document.activeElement;
