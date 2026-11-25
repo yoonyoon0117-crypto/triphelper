@@ -1398,9 +1398,10 @@
     startPolling();
 
     if ('serviceWorker' in navigator) {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('/sw.js').catch(() => {});
-      });
+      // boot()의 비동기 작업 뒤에는 'load'가 이미 지나갂을 수 있어, 늦지 않게 바로 등록한다.
+      const registerSw = () => navigator.serviceWorker.register('/sw.js').catch(() => {});
+      if (document.readyState === 'complete') registerSw();
+      else window.addEventListener('load', registerSw, { once: true });
     }
   }
 

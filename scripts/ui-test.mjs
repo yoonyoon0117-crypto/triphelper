@@ -458,6 +458,23 @@ async function run() {
     } catch (e) { return 'error: ' + e.message; }
   });
   assert.equal(swReady, 'registered');
+  // 오프라인용 프리캐시에 나눔스퀘어라운드 폰트가 실제로 들어갔는지
+  const precachedFonts = await page.evaluate(async () => {
+    for (let i = 0; i < 30; i++) {
+      for (const key of await caches.keys()) {
+        const cache = await caches.open(key);
+        const paths = (await cache.keys()).map((r) => new URL(r.url).pathname);
+        if (paths.includes('/fonts/NanumSquareRoundR.woff2') && paths.includes('/fonts/NanumSquareRoundB.woff2')) {
+          return { cache: key, paths: paths.filter((p) => p.startsWith('/fonts/')) };
+        }
+      }
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    return null;
+  });
+  assert.ok(precachedFonts, '폰트 프리캐시 없음 (오프라인 로드 불가)');
+  assert.equal(precachedFonts.cache, 'trip-helper-v8', `캐시 버전: ${precachedFonts.cache}`);
+  console.log(`   프리캐시: ${precachedFonts.cache} → ${precachedFonts.paths.join(', ')}`);
   const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
   assert.match(viewport, /viewport-fit=cover/);
   assert.match(viewport, /maximum-scale=1/);
