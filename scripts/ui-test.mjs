@@ -15,6 +15,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +38,7 @@ fs.mkdirSync(SHOT_DIR, { recursive: true });
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'trip-ui-'));
 const DATA_DIR = path.join(tmpRoot, 'data');
 let server;
+let fxServer;
 let browser;
 let base;
 
@@ -71,11 +73,28 @@ const api = async (p, opts) => {
 };
 
 async function run() {
+  // ── 네이버 환율 fixture (외부 네트워크 없이 동작) ─────────
+  const FX_FIXTURE = { EUR: '1,471.88', USD: '1,343.20', JPY: '843.35' };
+  fxServer = http.createServer((req, res) => {
+    const cur = (/FX_([A-Z]{3})KRW/.exec(req.url || '') || [])[1] || 'EUR';
+    res.writeHead(200, { 'Content-Type': 'application/json;charset=UTF-8' });
+    res.end(JSON.stringify({
+      exchangeInfo: {
+        calcPrice: FX_FIXTURE[cur] || FX_FIXTURE.EUR,
+        localTradedAt: '2026-11-25T10:44:33+09:00',
+        marketStatus: 'OPEN',
+        stockExchangeType: { nameKor: '하나은행' },
+      },
+    }));
+  });
+  await new Promise((r) => fxServer.listen(0, '127.0.0.1', r));
+  const FX_BASE = `http://127.0.0.1:${fxServer.address().port}`;
+
   // ── 서버 ──────────────────────────────────────
   const port = 3200 + Math.floor(Math.random() * 400);
   base = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-    env: { ...process.env, PORT: String(port), DATA_DIR, NODE_ENV: 'test' },
+    env: { ...process.env, PORT: String(port), DATA_DIR, NODE_ENV: 'test', NAVER_EXCHANGE_API_BASE: FX_BASE },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   server.stdout.on('data', () => {});
@@ -98,9 +117,9 @@ async function run() {
   page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
 
   // ── 1. 첫 화면 · 정산 ─────────────────────────
-  step('1. 첫 화면: 기본 스페인 여행 · 정산 요약');
+  step('1. 첫 화면: 첫 번째 탭 일정 · 정산 요약');
   await page.goto(base, { waitUntil: 'networkidle' });
-  await page.waitForSelector('.hero');
+  await page.waitForSelector('#view .section-title');
   await page.waitForTimeout(400);
 
   assert.equal(await page.title(), 'Trip helper✈️');
@@ -110,9 +129,18 @@ async function run() {
 
   // Cart helper 스타일 골격: 글로시 상단 바 + 하단 고정 탭 3개 + 새로고침
   const tabs = await page.$$eval('#tabbar .tab', (els) => els.map((e) => e.dataset.tab));
-  assert.deepEqual(tabs, ['settle', 'plan', 'settings'], '하단 탭: 정산·일정·설정');
+  assert.deepEqual(tabs, ['plan', 'settle', 'rate', 'settings'], '하단 탭 순서: 일정·정산·환율·설정');
   const tabLabels = await page.$$eval('#tabbar .tab-label', (els) => els.map((e) => e.textContent.trim()));
-  assert.deepEqual(tabLabels, ['정산', '일정', '설정']);
+  assert.deepEqual(tabLabels, ['일정', '정산', '환율', '설정']);
+  // Cart helper 처럼 이모지 아이콘 — 비활성은 흑백/흐리게, 활성은 컬러
+  const tabIcons = await page.$$eval('#tabbar .tab-ico', (els) => els.map((e) => e.textContent.trim()));
+  assert.deepEqual(tabIcons, ['🗓️', '🧾', '💱', '⚙️'], `이모지 탭 아이콘: ${tabIcons.join(' ')}`);
+  const tabLook = await page.evaluate(() => [...document.querySelectorAll('#tabbar .tab')].map((t) => {
+    const ico = getComputedStyle(t.querySelector('.tab-ico'));
+    return { on: t.classList.contains('is-active'), filter: ico.filter, opacity: ico.opacity };
+  }));
+  assert.match(tabLook[0].filter, /none/, '활성 탭 아이콘은 컬러');
+  assert.ok(tabLook.slice(1).every((t) => /grayscale/.test(t.filter) && Number(t.opacity) < 1), '비활성 탭 아이콘은 흑백·흐리게');
   assert.ok(await page.$('#btnRefresh'), '상단 새로고침 버튼');
   const barBg = await page.$eval('.appbar', (el) => getComputedStyle(el).backgroundImage);
   assert.match(barBg, /linear-gradient/, '상단 바 글로시 그라데이션');
@@ -142,6 +170,15 @@ async function run() {
   assert.equal(tabbarPos, 'fixed', '하단 탭 바 고정');
 
   await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'));
+  // 앱을 열면 맨 왼쪽 탭(일정)이 기본으로 열린다
+  assert.match(await page.getAttribute('#tabbar .tab[data-tab="plan"]', 'class'), /is-active/, '첫 화면은 일정 탭');
+  assert.match(await page.textContent('#btnAdd'), /일정 추가하기/);
+  assert.match(await page.textContent('#view'), /Day 1/);
+
+  // 정산 탭으로 이동해 정산 요약 확인
+  await page.click('#tabbar .tab[data-tab="settle"]');
+  await page.waitForSelector('.hero');
+  await page.waitForTimeout(250);
   const heroText = await page.textContent('.hero');
   assert.match(heroText, /정산 상태/, '지출이 없으면 정산 상태로 보인다');
   assert.match(heroText, /딱 맞아요😆/);
@@ -170,6 +207,8 @@ async function run() {
   const summaryText = await page.textContent('.trip-summary');
   assert.match(summaryText, /12\.19 – 12\.26/, '여행 요약 바 날짜');
   assert.match(summaryText, /1 EUR = 1,500원/, '여행 요약 바 환율');
+  const rateBadge = await page.$('.trip-summary .summary-link');
+  assert.ok(rateBadge, '요약 바 환율 배지는 누를 수 있는 버튼');
 
   const chips = await page.$$('#peopleStrip .person-chip:not(.is-add)');
   assert.equal(chips.length, 2, '두 가족 칩');
@@ -234,6 +273,13 @@ async function run() {
   assert.ok(await page.$('#syncBadge'), '동기화 상태 표시');
   const shareUrl = await page.textContent('#view .share-box .url');
   assert.match(shareUrl, /\/t\/[A-Z0-9]{6}$/, `공유 링크 /t/CODE: ${shareUrl}`);
+
+  // 설정 여행 정보 카드에서도 네이버 환율을 채울 수 있다 (저장은 '여행 정보 저장'으로 확정)
+  await page.click('#view [data-act="st-rate-fetch"]');
+  await page.waitForTimeout(700);
+  assert.equal(await page.inputValue('#stRate'), '1,471.88', '네이버 환율이 입력 칸에 채워짐');
+  assert.match(await page.textContent('#toast'), /저장을 누르면 반영돼요/);
+  await page.fill('#stRate', '1500'); // 이후 단계는 1,500원 기준으로 계속
 
   // 설정 탭에서 여행 정보 저장 → 서버에 남고 상단 pill에도 반영
   await page.fill('#stSub', '두 가족 첫 유럽 여행 · 겨울');
@@ -335,6 +381,70 @@ async function run() {
   const withItnExpense = (await api(`/api/trips/${tripBefore.id}`)).data;
   assert.ok(withItnExpense.expenses.some((e) => e.title === '사그라다 파밀리아' && e.date === '2026-12-20'));
 
+  // ── 5-1. 환율 탭 ─────────────────────────────
+  step('5-1. 환율 탭 — 네이버 환율 · 현지↔원화 양방향 계산');
+  await page.click('#tabbar .tab[data-tab="rate"]');
+  await page.waitForSelector('#cvLocal');
+  await page.waitForTimeout(400);
+  const rateView = await page.textContent('#view');
+  assert.match(rateView, /환율 계산기/);
+  assert.match(rateView, /1 EUR = 1,500원/, '여행에 저장된 환율이 적용 중');
+  assert.match(rateView, /네이버 환율 불러오기/);
+  assert.match(rateView, /€5.*€10.*€20.*€50.*€100/s, '빠른 금액 칩');
+  await shot(page, '09b-rate-calculator.png');
+
+  // 현지 통화 → 원화
+  await page.fill('#cvLocal', '25');
+  await page.waitForTimeout(150);
+  assert.equal(await page.inputValue('#cvKrw'), '37,500', '25 EUR → 37,500원');
+
+  // 원화 → 현지 통화 (반대 방향도 즉시 계산)
+  await page.fill('#cvKrw', '90000');
+  await page.waitForTimeout(150);
+  assert.equal(await page.inputValue('#cvLocal'), '60', '90,000원 → 60 EUR');
+
+  // 빠른 금액 칩 €50
+  await page.click('#cvChips [data-act="rate-chip"] >> nth=3');
+  await page.waitForTimeout(150);
+  assert.equal(await page.inputValue('#cvLocal'), '50');
+  assert.equal(await page.inputValue('#cvKrw'), '75,000', '€50 칩 → 75,000원');
+
+  // 초기화
+  await page.click('#view [data-act="rate-clear"]');
+  await page.waitForTimeout(150);
+  assert.equal(await page.inputValue('#cvLocal'), '');
+  assert.equal(await page.inputValue('#cvKrw'), '');
+
+  // 네이버 환율 불러오기 (fixture) → 계산기에 바로 적용
+  await page.click('#btnRateFetch');
+  await page.waitForSelector('#rateNaver');
+  await page.waitForTimeout(400);
+  assert.match(await page.textContent('#rateNaver'), /1 EUR = 1,471\.88원/);
+  assert.match(await page.textContent('#toast'), /네이버 환율 1,471\.88원/);
+  assert.match(await page.textContent('#cvNote'), /1,471\.88원 기준/, '계산기가 네이버 환율을 쓴다');
+  assert.match(await page.textContent('#fxRateValue'), /1,500원/, '저장된 환율은 아직 1,500원');
+  await page.fill('#cvLocal', '10');
+  await page.waitForTimeout(150);
+  assert.equal(await page.inputValue('#cvKrw'), '14,719', '네이버 환율로 계산 (10 EUR → 14,719원)');
+  await shot(page, '09c-rate-naver.png');
+
+  // 이 환율 저장 → 여행 환율로 반영
+  await page.click('#view [data-act="rate-save"]');
+  await page.waitForTimeout(900);
+  const savedFx = (await api(`/api/trips/${tripBefore.id}`)).data;
+  assert.equal(savedFx.exchangeRate, 1471.88, '여행 환율이 네이버 환율로 저장됨');
+  assert.match(await page.textContent('#fxRateValue'), /1,471\.88원/);
+  assert.ok(!(await page.$('#rateNaver')), '저장 뒤에는 네이버 안내 상자가 사라진다');
+
+  // 정산 요약 배지에서도 바뀐 환율 + 배지를 누르면 환율 탭으로
+  await page.click('#tabbar .tab[data-tab="settle"]');
+  await page.waitForTimeout(300);
+  assert.match(await page.textContent('.summary-link'), /1 EUR = 1,471\.88원/);
+  await page.click('.summary-link');
+  await page.waitForSelector('#cvLocal');
+  await page.waitForTimeout(250);
+  assert.match(await page.getAttribute('#tabbar .tab[data-tab="rate"]', 'class'), /is-active/, '배지를 누르면 환율 탭');
+
   // ── 6. 친구 5명 여행 ─────────────────────────
   step('6. 친구 5명 새 여행 → 5명 균등 + 3명 부분 분담 정산');
   await page.click('#btnTripSwitch');
@@ -355,6 +465,11 @@ async function run() {
   await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('오사카'), null, { timeout: 15000 });
   await page.waitForTimeout(600);
 
+  // 새 여행은 첫 탭(일정)으로 열린다 → 정산 탭에서 참여자 확인
+  assert.match(await page.getAttribute('#tabbar .tab[data-tab="plan"]', 'class'), /is-active/);
+  await page.click('#tabbar .tab[data-tab="settle"]');
+  await page.waitForSelector('#peopleStrip');
+  await page.waitForTimeout(250);
   const friendChips = await page.$$('#peopleStrip .person-chip:not(.is-add)');
   assert.equal(friendChips.length, 5, '친구 5명 칩');
   const newTrip = (await api('/api/trips')).data.trips.find((t) => t.name.includes('오사카'));
@@ -409,9 +524,12 @@ async function run() {
   page2.on('pageerror', (e) => errors.push(`page2 pageerror: ${e.message}`));
   page2.on('console', (m) => { if (m.type() === 'error') errors.push(`page2 console: ${m.text()}`); });
   await page2.goto(`${base}/t/${friendsTrip.code}`, { waitUntil: 'networkidle' });
-  await page2.waitForSelector('.hero');
-  await page2.waitForTimeout(400);
+  await page2.waitForSelector('#tabbar');
+  await page2.waitForTimeout(500);
   assert.match(await page2.textContent('#tripName'), /오사카/);
+  await page2.click('#tabbar .tab[data-tab="settle"]');
+  await page2.waitForSelector('.hero');
+  await page2.waitForTimeout(250);
   assert.match(await page2.textContent('#view'), /390,000/);
 
   // 기기 2 에서 지출 추가 → 기기 1 이 폴링으로 받는다
@@ -435,13 +553,19 @@ async function run() {
   await (await rows[rows.length - 1]).click();
   await page.waitForTimeout(800);
   assert.match(await page.textContent('#tripName'), /스페인/);
+  await page.click('#tabbar .tab[data-tab="settle"]');
+  await page.waitForSelector('.hero');
+  await page.waitForTimeout(250);
   assert.match(await page.textContent('#view'), /김家/);
 
   // ── 8-1. ?trip=코드 로 바로 열기 ─────────────
   step('8-1. ?trip=코드 링크로 바로 열기');
   await page.goto(`${base}/?trip=${friendsTrip.code}`, { waitUntil: 'networkidle' });
-  await page.waitForSelector('.hero');
+  await page.waitForSelector('#tabbar');
   await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('오사카'));
+  await page.click('#tabbar .tab[data-tab="settle"]');
+  await page.waitForSelector('.hero');
+  await page.waitForTimeout(250);
   assert.match(await page.textContent('#view'), /395,000/, '링크로 연 여행의 총 지출');
 
   // ── 9. PWA ───────────────────────────────────
@@ -473,7 +597,7 @@ async function run() {
     return null;
   });
   assert.ok(precachedFonts, '폰트 프리캐시 없음 (오프라인 로드 불가)');
-  assert.equal(precachedFonts.cache, 'trip-helper-v9', `캐시 버전: ${precachedFonts.cache}`);
+  assert.equal(precachedFonts.cache, 'trip-helper-v10', `캐시 버전: ${precachedFonts.cache}`);
   console.log(`   프리캐시: ${precachedFonts.cache} → ${precachedFonts.paths.join(', ')}`);
   const viewport = await page.getAttribute('meta[name="viewport"]', 'content');
   assert.match(viewport, /viewport-fit=cover/);
@@ -512,4 +636,5 @@ run()
   .finally(async () => {
     try { if (browser) await browser.close(); } catch { /* 이미 닫힘 */ }
     if (server) server.kill();
+    if (fxServer) fxServer.close();
   });

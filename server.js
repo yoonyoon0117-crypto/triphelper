@@ -23,13 +23,16 @@ const {
   seedTrip,
   stamp,
 } = require('./lib/trips');
+const { createNaverRateClient, RateLookupError } = require('./lib/rates');
 
 const PORT = Number(process.env.PORT) || 3000;
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 
-function createApp(store) {
+function createApp(store, options = {}) {
   const app = express();
+  // 환율 조회 — 테스트에서는 options.rateLookup 으로 네이버 요청을 대체합니다.
+  const rateLookup = options.rateLookup || createNaverRateClient();
   app.disable('x-powered-by');
   app.use(express.json({ limit: '200kb' }));
 
@@ -56,6 +59,37 @@ function createApp(store) {
       maxParticipants: MAX_PARTICIPANTS,
     })
   );
+
+  // ── 네이버 환율 ───────────────────────────────────────────
+  app.get('/api/exchange-rate', async (req, res, next) => {
+    const currency = String(req.query.currency || '').trim().toUpperCase();
+    try {
+      if (!CURRENCIES.includes(currency)) {
+        throw new HttpError(400, `지원하지 않는 통화예요. (${CURRENCIES.join(', ')})`);
+      }
+      const found = await rateLookup(currency);
+      res.set('Cache-Control', 'no-store');
+      ok(res, {
+        ok: true,
+        currency,
+        rate: found.rate, // 1단위 = ?원 (앱에 적용하는 값)
+        unitRate: found.quotedRate, // 네이버 고시 그대로 (100 JPY = 843.08원 등)
+        baseUnit: found.baseUnit,
+        source: 'naver',
+        fetchedAt: new Date().toISOString(),
+        quotedAt: found.quotedAt || null,
+      });
+    } catch (err) {
+      if (err instanceof HttpError) return next(err);
+      if (err instanceof RateLookupError) {
+        return res.status(502).json({
+          ok: false,
+          error: '네이버에서 환율을 불러오지 못했어요. 잠시 뒤 다시 시도하거나 직접 입력해 주세요.',
+        });
+      }
+      return next(err);
+    }
+  });
 
   // ── 여행 목록/생성 ────────────────────────────────────────
   app.get('/api/trips', (req, res) => {

@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +33,7 @@ fs.mkdirSync(DOCS, { recursive: true });
 const ALIAS = {
   '01-정산.png': '01-settle.png',
   '03-일정.png': '03-plan.png',
+  '03b-환율-계산기.png': '04-rate.png',
   '05-설정.png': '05-settings.png',
   '11-친구5명-정산.png': '10-friends.png',
 };
@@ -49,8 +51,25 @@ const call = async (p, opts = {}) => {
   return r.json();
 };
 
+// 네이버 환율 fixture — 스크린샷도 외부 네트워크 없이 같은 화면을 만든다
+const FX_FIXTURE = { EUR: '1,472.27', USD: '1,343.20', JPY: '843.35' };
+const fxServer = http.createServer((req, res) => {
+  const cur = (/FX_([A-Z]{3})KRW/.exec(req.url || '') || [])[1] || 'EUR';
+  res.writeHead(200, { 'Content-Type': 'application/json;charset=UTF-8' });
+  res.end(JSON.stringify({
+    exchangeInfo: {
+      calcPrice: FX_FIXTURE[cur] || FX_FIXTURE.EUR,
+      localTradedAt: '2026-11-25T10:44:33+09:00',
+      marketStatus: 'OPEN',
+      stockExchangeType: { nameKor: '하나은행' },
+    },
+  }));
+});
+await new Promise((r) => fxServer.listen(0, '127.0.0.1', r));
+const FX_BASE = `http://127.0.0.1:${fxServer.address().port}`;
+
 const server = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-  env: { ...process.env, PORT: String(port), DATA_DIR: dataDir },
+  env: { ...process.env, PORT: String(port), DATA_DIR: dataDir, NAVER_EXCHANGE_API_BASE: FX_BASE },
   stdio: 'ignore',
 });
 
@@ -114,6 +133,9 @@ try {
   };
 
   await page.goto(`${base}/t/${trip.code}`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#tabbar');
+  await page.evaluate(() => window.scrollTo({ top: 0 }));
+  await page.click('#tabbar .tab[data-tab="settle"]');
   await page.waitForSelector('.hero');
   await sleep(800);
   await shots('01-정산.png');
@@ -128,6 +150,17 @@ try {
   await page.evaluate(() => window.scrollTo({ top: 420 }));
   await shots('04-일정-카드.png');
   await page.evaluate(() => window.scrollTo({ top: 0 }));
+
+  // 환율 계산기 (네이버 환율 불러오기 전/후)
+  await page.click('#tabbar .tab[data-tab="rate"]');
+  await page.waitForSelector('#cvLocal');
+  await sleep(400);
+  await shots('03b-환율-계산기.png');
+  await page.fill('#cvLocal', '50');
+  await page.click('#btnRateFetch');
+  await page.waitForSelector('#rateNaver');
+  await sleep(500);
+  await shots('03c-환율-네이버.png');
 
   await page.click('#tabbar .tab[data-tab="settings"]');
   await page.waitForSelector('#stName');
@@ -176,6 +209,8 @@ try {
   await call(`/api/trips/${friends.id}/itinerary`, { method: 'POST', body: { day: 1, time: '18:00', place: '도톤보리', region: '오사카', memo: '저녁 먹고 산책' } });
 
   await page.goto(`${base}/t/${friends.code}`, { waitUntil: 'networkidle' });
+  await page.waitForSelector('#tabbar');
+  await page.click('#tabbar .tab[data-tab="settle"]');
   await page.waitForSelector('.hero');
   await sleep(700);
   await shots('11-친구5명-정산.png');
@@ -193,4 +228,5 @@ try {
 } finally {
   if (browser) await browser.close().catch(() => {});
   server.kill();
+  fxServer.close();
 }

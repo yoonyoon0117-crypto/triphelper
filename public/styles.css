@@ -201,6 +201,65 @@ a { color: var(--sky-d); }
 .summary-item { display: inline-flex; align-items: center; gap: 5px; }
 .summary-item svg { width: 13px; height: 13px; color: #77b0d6; flex: none; }
 .summary-sep { width: 1px; height: 11px; background: #dfeaf2; }
+/* 환율 배지 → 환율 탭으로 (누를 수 있게) */
+.summary-link {
+  border: 0; background: none; padding: 2px 4px; margin: -2px -4px;
+  border-radius: 8px; font: inherit; color: var(--sky-d);
+  transition: background 0.15s ease;
+}
+.summary-link .arr { font-size: 13px; line-height: 1; color: #9cc4e0; margin-left: 1px; }
+.summary-link:active { background: #eaf5fe; }
+
+/* ── 환율 탭 ──────────────────────────────────── */
+.fx-card { display: flex; flex-direction: column; gap: 10px; }
+.fx-rate-row { display: flex; align-items: center; gap: 10px; }
+.fx-rate-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.fx-k { font-size: 11px; font-weight: 400; color: var(--ink-3); }
+.fx-v { font-size: 20px; font-weight: 600; letter-spacing: -0.03em; color: var(--sky-d); font-variant-numeric: tabular-nums; }
+.fx-s { font-size: 11px; font-weight: 400; color: var(--ink-3); }
+.fx-saved { font-size: 11px; font-weight: 400; color: var(--ink-3); border-top: 1px dashed var(--line); padding-top: 8px; }
+.fx-saved b { font-weight: 500; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+
+.fx-naver {
+  background: #f4fbf7; border: 1px solid #d6eede; border-radius: var(--r-sm);
+  padding: 10px 11px; display: flex; flex-direction: column; gap: 6px;
+}
+.fx-naver-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.fx-badge {
+  font-size: 10.5px; font-weight: 500; color: #1f7c6d;
+  background: #e3f6ef; border: 1px solid #c8e9e2; border-radius: 999px; padding: 2px 7px;
+}
+.fx-when { font-size: 10.5px; font-weight: 400; color: var(--ink-3); }
+.fx-naver-val { font-size: 18px; font-weight: 600; letter-spacing: -0.03em; color: #177563; font-variant-numeric: tabular-nums; }
+.fx-naver-actions { display: flex; gap: 6px; }
+.fx-naver-actions .btn { flex: none; }
+
+.fx-calc { display: flex; flex-direction: column; gap: 9px; }
+.fx-field {
+  display: flex; align-items: center; gap: 8px;
+  background: #fff; border: 1px solid #dde9f1; border-radius: var(--r-sm);
+  padding: 10px 12px;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.fx-field:focus-within { border-color: #8cc2e6; box-shadow: 0 0 0 4px rgba(27, 122, 192, 0.12); }
+.fx-cur {
+  flex: none; min-width: 34px; text-align: center;
+  font-size: 11.5px; font-weight: 500; color: var(--sky-d);
+  background: var(--sky-soft); border-radius: 8px; padding: 3px 6px;
+}
+.fx-input {
+  flex: 1; min-width: 0; border: 0; outline: none; background: none;
+  font-size: 22px; font-weight: 600; letter-spacing: -0.03em; color: var(--ink);
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.fx-input::placeholder { color: #c3d3de; font-weight: 500; }
+.fx-swap { text-align: center; line-height: 1; margin: -4px 0; }
+.fx-swap span { display: inline-block; font-size: 13px; color: #9cc4e0; }
+.fx-chips { gap: 5px; }
+.fx-chips .chip { padding: 6px 11px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.fx-actions { display: flex; gap: 7px; margin-top: 2px; }
+.fx-actions .btn.small { flex: 1; text-align: center; }
+.fx-tip { padding: 0 4px; line-height: 1.55; }
 
 .people-strip {
   display: flex; gap: 6px; margin-top: 9px;
@@ -427,36 +486,38 @@ a { color: var(--sky-d); }
 .empty .t { margin-top: 7px; font-size: 14.5px; font-weight: 500; }
 .empty .s { margin-top: 4px; font-size: 12.5px; font-weight: 400; color: var(--ink-3); line-height: 1.55; }
 
-/* ── 하단 탭 바 ───────────────────────────── */
+/* ── 하단 탭 바 (Cart helper 와 같은 이모지 탭) ─ */
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 40;
   max-width: 480px; margin: 0 auto;
-  display: grid; grid-template-columns: repeat(3, 1fr);
+  display: grid; grid-template-columns: repeat(4, 1fr);
   background: rgba(255, 255, 255, 0.94);
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
   border-top: 1px solid var(--line);
-  padding: 5px 10px calc(5px + env(safe-area-inset-bottom));
+  padding: 6px 8px calc(5px + env(safe-area-inset-bottom));
   min-height: calc(var(--tabbar-h) + env(safe-area-inset-bottom));
 }
 .tab {
-  display: flex; flex-direction: column; align-items: center; gap: 2px;
-  padding: 5px 0 3px; border-radius: 14px;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: 6px 2px 4px; border-radius: 12px;
   color: #8095a5; font-size: 10.5px; font-weight: 400; letter-spacing: -0.01em;
   transition: color 0.16s ease;
 }
 .tab-ico {
-  display: grid; place-items: center;
-  width: 38px; height: 26px; border-radius: 10px;
-  transition: background 0.16s ease, box-shadow 0.16s ease;
+  display: block;
+  font-size: 21px; line-height: 1;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "EmojiOne Color", sans-serif;
+  filter: grayscale(1); opacity: 0.62;
+  transition: filter 0.16s ease, opacity 0.16s ease;
 }
-.tab-ico svg { width: 20px; height: 20px; }
 .tab.is-active { color: var(--sky-d); font-weight: 500; }
-.tab.is-active .tab-ico { background: var(--sky-soft); box-shadow: inset 0 0 0 1px var(--sky-line); }
+.tab.is-active .tab-ico { filter: none; opacity: 1; }
 
 /* ── 설정 탭 ──────────────────────────────── */
 .settings-block { display: flex; flex-direction: column; gap: 10px; }
 .settings-block + .settings-block { margin-top: 6px; }
 .form-grid { display: flex; flex-direction: column; gap: 11px; }
+.st-rate-btn { align-self: flex-start; }
 
 .row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .sync {

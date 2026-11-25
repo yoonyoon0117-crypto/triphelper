@@ -24,7 +24,7 @@
   const state = {
     trip: null,
     trips: [],
-    tab: 'settle',
+    tab: 'plan',
     version: 0,
     sheetOpen: false,
     syncing: false,
@@ -201,12 +201,13 @@
     state.lastSync = new Date();
     localStorage.setItem(LS_LAST, trip.code);
     renderHeader();
-    if (!sameTrip) state.tab = 'settle';
+    if (!sameTrip) state.tab = 'plan';
+    if (!sameTrip) { fx.preview = null; fx.local = ''; fx.krw = ''; }
     renderTabs();
-    // 설정 탭에서 입력하는 중이면 자동 동기화가 화면(입력값)을 갈아엎지 않게 한다
+    // 설정·환율 탭에서 입력하는 중이면 자동 동기화가 화면(입력값)을 갈아엎지 않게 한다
     const focused = document.activeElement;
     const typing = focused && focused.closest && focused.closest('#view') && /^(INPUT|SELECT|TEXTAREA)$/.test(focused.tagName);
-    if (!(soft && state.tab === 'settings' && typing)) renderView();
+    if (!(soft && (state.tab === 'settings' || state.tab === 'rate') && typing)) renderView();
     if (!soft && !sameTrip) window.scrollTo({ top: 0 });
     const url = `/t/${trip.code}`;
     if (location.pathname !== url) history.replaceState({}, '', url);
@@ -269,7 +270,7 @@
         <div class="summary-row">
           <span class="summary-item"><svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="16" rx="3"/><path d="M8 3v4M16 3v4M3.5 10.5h17"/></svg>${md(t.startDate)} – ${md(t.endDate)} · ${dayCount(t)}일</span>
           ${t.localCurrency === t.baseCurrency ? '' : `<span class="summary-sep"></span>
-          <span class="summary-item"><svg viewBox="0 0 24 24"><path d="M4 7h13l3 5-3 5H4z"/><path d="M8 11v3M12 11v3"/></svg>1 ${esc(t.localCurrency)} = ${nf(t.exchangeRate, 2)}원</span>`}
+          <button class="summary-item summary-link" data-act="go-rate" aria-label="환율 계산기 열기"><svg viewBox="0 0 24 24"><path d="M4 7h13l3 5-3 5H4z"/><path d="M8 11v3M12 11v3"/></svg>1 ${esc(t.localCurrency)} = ${nf(t.exchangeRate, 2)}원<span class="arr">›</span></button>`}
         </div>
         <div class="people-strip" id="peopleStrip">${stripHtml()}</div>
       </section>`;
@@ -392,6 +393,192 @@
     }
   }
 
+  // ── 렌더: 환율 계산기 ────────────────────────────────
+  // 네이버에서 방금 불러온 환율(저장 전)과 계산기 입력값을 여기에 둔다
+  const fx = { preview: null, loading: false, local: '', krw: '' };
+
+  const fxRate = () => {
+    const t = state.trip;
+    if (!t) return 0;
+    const p = fx.preview;
+    if (p && p.currency === t.localCurrency) return Number(p.rate) || 0;
+    return Number(t.exchangeRate) || 0;
+  };
+  const fxRateLine = (rate, cur) => (rate > 0 ? `1 ${cur} = ${nf(rate, 2)}원` : '환율을 먼저 넣어 주세요');
+  const fxWhen = (iso) => {
+    const d = new Date(iso || '');
+    if (!iso || Number.isNaN(d.getTime())) return '방금';
+    return `${d.getMonth() + 1}.${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+  // 통화 단위에 맞는 빠른 금액 칩 (€5 · ¥1,000 …)
+  const fxChipAmounts = (rate) => {
+    if (rate >= 100) return [5, 10, 20, 50, 100];
+    if (rate >= 1) return [100, 500, 1000, 5000];
+    return [1000, 5000, 10000, 50000];
+  };
+  const fmtLocal = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n) || n === 0) return '';
+    return nf(n, Number.isInteger(n) ? 0 : 2);
+  };
+  // 환율이 바뀌면 마지막에 고친 입력값을 기준으로 반대쪽을 다시 계산
+  const fxRecalc = () => {
+    const rate = fxRate();
+    if (!(rate > 0)) return;
+    if (numOf(fx.local) > 0) fx.krw = String(Math.round(numOf(fx.local) * rate));
+    else if (numOf(fx.krw) > 0) fx.local = String(Math.round((numOf(fx.krw) / rate) * 100) / 100);
+  };
+
+  function renderRates() {
+    const t = state.trip;
+    const cur = t.localCurrency;
+    const rate = fxRate();
+    const savedRate = Number(t.exchangeRate) || 0;
+    const preview = fx.preview && fx.preview.currency === cur ? fx.preview : null;
+    const sym = SYMBOLS[cur] || `${cur} `;
+    fxRecalc();
+
+    const naver = preview ? `
+        <div class="fx-naver fade-in" id="rateNaver">
+          <div class="fx-naver-top">
+            <span class="fx-badge">네이버 환율</span>
+            <span class="fx-when">${esc(fxWhen(preview.quotedAt || preview.fetchedAt))} 기준</span>
+          </div>
+          <div class="fx-naver-val" id="rateNaverValue">${fxRateLine(preview.rate, cur)}</div>
+          <div class="fx-naver-actions">
+            <button class="btn small primary" data-act="rate-save">이 환율 저장</button>
+            <button class="btn small" data-act="rate-dismiss">닫기</button>
+          </div>
+        </div>` : '';
+
+    return `
+      <div class="section-title"><h3>환율 계산기</h3><span class="hint">쇼핑할 때 바로</span></div>
+      <section class="card card-pad fx-card fade-in">
+        <div class="fx-rate-row">
+          <div class="fx-rate-main">
+            <span class="fx-k">저장된 환율</span>
+            <span class="fx-v" id="fxRateValue">${fxRateLine(savedRate, cur)}</span>
+            <span class="fx-s">${preview ? '지금은 네이버 환율로 계산 중' : '설정 탭 여행 정보에 저장된 값'}</span>
+          </div>
+          <button class="btn small soft" id="btnRateFetch" data-act="rate-fetch">${fx.loading ? '불러오는 중…' : '네이버 환율 불러오기'}</button>
+        </div>
+        ${naver}
+      </section>
+
+      <section class="card card-pad fx-calc fade-in">
+        <div class="fx-field">
+          <span class="fx-cur">${esc(cur)}</span>
+          <input class="fx-input" id="cvLocal" inputmode="decimal" autocomplete="off" value="${esc(fmtLocal(numOf(fx.local)))}" placeholder="0" aria-label="${esc(cur)} 금액" />
+        </div>
+        <div class="fx-swap" aria-hidden="true"><span>⇅</span></div>
+        <div class="fx-field">
+          <span class="fx-cur">₩</span>
+          <input class="fx-input" id="cvKrw" inputmode="numeric" autocomplete="off" value="${esc(fmtLocal(numOf(fx.krw)))}" placeholder="0" aria-label="원화 금액" />
+        </div>
+        <div class="chips fx-chips" id="cvChips">
+          ${fxChipAmounts(rate).map((n) => `<button class="chip" data-act="rate-chip" data-amount="${n}">${sym}${nf(n)}</button>`).join('')}
+        </div>
+        <div class="fx-actions">
+          <button class="btn small" data-act="rate-clear">C 초기화</button>
+          <button class="btn small primary" data-act="rate-to-expense">＋ 이 금액 지출 추가</button>
+        </div>
+        <div class="note" id="cvNote">${rate > 0 ? `1 ${esc(cur)} = ${nf(rate, 2)}원 기준으로 계산해요.` : '환율을 넣으면 바로 계산돼요.'}</div>
+      </section>
+
+      <div class="note fx-tip">💱 네이버 환율은 매매기준율(하나은행 고시)이에요. 카드 결제 금액은 수수료·환전 스프레드 때문에 조금 다를 수 있어요.</div>
+    `;
+  }
+
+  function bindRates() {
+    const localEl = $('#cvLocal');
+    const krwEl = $('#cvKrw');
+
+    const fromLocal = (raw) => {
+      const rate = fxRate();
+      fx.local = raw;
+      const val = numOf(raw);
+      const krw = val > 0 && rate > 0 ? Math.round(val * rate) : 0;
+      fx.krw = krw > 0 ? String(krw) : '';
+      if (krwEl) krwEl.value = krw > 0 ? nf(krw) : '';
+    };
+    const fromKrw = (raw) => {
+      const rate = fxRate();
+      fx.krw = raw;
+      const val = numOf(raw);
+      const local = val > 0 && rate > 0 ? Math.round((val / rate) * 100) / 100 : 0;
+      fx.local = local > 0 ? String(local) : '';
+      if (localEl) localEl.value = local > 0 ? fmtLocal(local) : '';
+    };
+
+    if (localEl) localEl.addEventListener('input', () => {
+      const clean = localEl.value.replace(/[^\d.]/g, '');
+      if (clean !== localEl.value) localEl.value = clean;
+      fromLocal(clean);
+    });
+    if (krwEl) krwEl.addEventListener('input', () => {
+      const clean = krwEl.value.replace(/[^\d]/g, '');
+      if (clean !== krwEl.value) krwEl.value = clean;
+      fromKrw(clean);
+    });
+
+    $$('#cvChips [data-act="rate-chip"]').forEach((b) => b.addEventListener('click', () => {
+      const amount = Number(b.dataset.amount) || 0;
+      const text = nf(amount);
+      if (localEl) localEl.value = text;
+      fromLocal(text);
+    }));
+
+    const on = (act, fn) => {
+      const el = $(`#view [data-act="${act}"]`);
+      if (el) el.addEventListener('click', fn);
+    };
+    on('rate-clear', () => {
+      fx.local = ''; fx.krw = '';
+      if (localEl) localEl.value = '';
+      if (krwEl) krwEl.value = '';
+    });
+    on('rate-fetch', fetchNaverRate);
+    on('rate-save', saveNaverRate);
+    on('rate-dismiss', () => { fx.preview = null; renderView(); });
+    on('rate-to-expense', () => {
+      const amount = numOf(fx.local);
+      if (!(amount > 0)) { toast('먼저 금액을 입력해 주세요.', true); if (localEl) localEl.focus(); return; }
+      openExpenseSheet({ preset: { amount: String(amount), currency: 'local' } });
+    });
+  }
+
+  async function fetchNaverRate() {
+    const t = state.trip;
+    if (!t || fx.loading) return;
+    const cur = t.localCurrency;
+    fx.loading = true;
+    const btn = $('#btnRateFetch');
+    if (btn) { btn.textContent = '불러오는 중…'; btn.disabled = true; }
+    try {
+      const data = await api(`/exchange-rate?currency=${encodeURIComponent(cur)}`);
+      fx.preview = { ...data, currency: data.currency || cur };
+      fx.loading = false;
+      renderView();
+      toast(`네이버 환율 ${nf(data.rate, 2)}원을 불러왔어요.`);
+    } catch (err) {
+      fx.loading = false;
+      if (btn) { btn.textContent = '네이버 환율 불러오기'; btn.disabled = false; }
+      toast(err.message, true);
+    }
+  }
+
+  async function saveNaverRate() {
+    const t = state.trip;
+    const p = fx.preview;
+    if (!t || !p) return;
+    if (p.currency !== t.localCurrency) { fx.preview = null; renderView(); return; }
+    try {
+      const trip = await api(`/trips/${t.id}`, { method: 'PATCH', body: { exchangeRate: Number(p.rate) } });
+      fx.preview = null;
+      applyTrip(trip);
+      toast(`네이버 환율 ${nf(Number(trip.exchangeRate), 2)}원을 여행 환율로 저장했어요.`);
+    } catch (err) { toast(err.message, true); }
+  }
   // ── 렌더: 일정 ───────────────────────────────────────────
   function mapHref(item) {
     if (item.mapUrl) return item.mapUrl;
@@ -454,6 +641,9 @@
     const y = window.scrollY;
     if (state.tab === 'plan') {
       $('#view').innerHTML = renderPlan();
+    } else if (state.tab === 'rate') {
+      $('#view').innerHTML = renderRates();
+      bindRates();
     } else if (state.tab === 'settings') {
       $('#view').innerHTML = renderSettings();
       bindSettings();
@@ -756,6 +946,7 @@
                 <input class="input" id="stRate" inputmode="decimal" value="${t.exchangeRate}" /></div>
             </div>
             <div class="note">환율을 바꾸면 현지 통화 지출이 모두 새 환율로 다시 계산돼요.</div>
+            <button class="btn small soft st-rate-btn" data-act="st-rate-fetch">네이버 환율 불러오기</button>
             <button class="btn primary" data-act="save-settings">여행 정보 저장</button>
           </div>
         </section>
@@ -830,6 +1021,27 @@
         applyTrip(trip);
         toast('여행 정보를 저장했어요');
       } catch (err) { toast(err.message, true); }
+    });
+
+    // 설정 탭에서도 네이버 환율을 바로 채울 수 있다 (저장은 아래 ‘여행 정보 저장’으로 확정)
+    const stFetch = $('#view [data-act="st-rate-fetch"]');
+    if (stFetch) stFetch.addEventListener('click', async () => {
+      const t = state.trip;
+      const currency = $('#stCur') ? $('#stCur').value : t.localCurrency;
+      const label = stFetch.textContent;
+      stFetch.textContent = '불러오는 중…';
+      stFetch.disabled = true;
+      try {
+        const data = await api(`/exchange-rate?currency=${encodeURIComponent(currency)}`);
+        const input = $('#stRate');
+        if (input) input.value = nf(data.rate, 2);
+        toast(`네이버 환율(${nf(data.rate, 2)}원)을 불러왔어요. 저장을 누르면 반영돼요.`);
+      } catch (err) {
+        toast(err.message, true);
+      } finally {
+        stFetch.textContent = label;
+        stFetch.disabled = false;
+      }
     });
 
     const copyBtn = $('#view [data-act="copy-link"]');
@@ -1318,6 +1530,9 @@
       const { act: a, id } = act.dataset;
       switch (a) {
         case 'add-expense': if (!state.trip) openNewTripSheet(); else openExpenseSheet({}); break;
+        case 'go-rate':
+          if (state.tab !== 'rate') { state.tab = 'rate'; window.scrollTo({ top: 0 }); renderView(); }
+          break;
         case 'add-plan': if (!state.trip) openNewTripSheet(); else openItinerarySheet({ preset: { day: 1 } }); break;
         case 'delete-trip': confirmDeleteTrip(); break;
         case 'edit-expense': openExpenseSheet({ expenseId: id }); break;

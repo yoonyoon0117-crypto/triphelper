@@ -12,16 +12,30 @@ const path = require('node:path');
 const { JsonStore } = require('../lib/store');
 const { createApp } = require('../server');
 const { seedTrip } = require('../lib/trips');
+const { RateLookupError } = require('../lib/rates');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'trip-helper-test-'));
 const store = new JsonStore(path.join(dir, 'data'));
 let server;
 let base;
 
+// 환율 조회는 테스트에서 네이버 대신 고정 응답을 쓴다(외부 네트워크 없이 검사).
+const rateCalls = [];
+const fakeRateLookup = async (currency) => {
+  rateCalls.push(currency);
+  if (currency === 'EUR') {
+    return { currency, rate: 1472.27, quotedRate: 1472.27, baseUnit: 1, quotedAt: '2026-11-25T10:44:33+09:00', bank: '하나은행' };
+  }
+  if (currency === 'JPY') {
+    return { currency, rate: 8.4335, quotedRate: 843.35, baseUnit: 100, quotedAt: '2026-11-25T10:44:33+09:00', bank: '하나은행' };
+  }
+  throw new RateLookupError('네이버에 연결하지 못했어요.');
+};
+
 test.before(async () => {
   await store.load();
   await store.write((state) => { state.trips.push(seedTrip()); });
-  const app = createApp(store);
+  const app = createApp(store, { rateLookup: fakeRateLookup });
   await new Promise((resolve) => {
     server = app.listen(0, '127.0.0.1', resolve);
   });
@@ -57,6 +71,41 @@ test('health / meta', async () => {
   const m = await call('/api/meta');
   assert.ok(m.data.currencies.includes('EUR'));
   assert.deepEqual(m.data.splitModes.map((x) => x.id), ['even', 'headcount', 'adults', 'select', 'custom']);
+});
+
+test('네이버 환율 API — EUR/JPY 단위 환산과 오류 처리', async () => {
+  // 소문자로 넣어도 통화 코드로 정규화
+  const eur = await call('/api/exchange-rate?currency=eur');
+  assert.equal(eur.status, 200);
+  assert.equal(eur.data.ok, true);
+  assert.equal(eur.data.currency, 'EUR');
+  assert.equal(eur.data.rate, 1472.27, '1 EUR = 1,472.27원');
+  assert.equal(eur.data.unitRate, 1472.27);
+  assert.equal(eur.data.baseUnit, 1);
+  assert.equal(eur.data.source, 'naver');
+  assert.match(eur.data.fetchedAt, /^\d{4}-\d{2}-\d{2}T/);
+  assert.equal(eur.res.headers.get('cache-control'), 'no-store', '환율은 캐시하지 않는다');
+
+  // JPY 는 네이버 100엔 고시를 1엔당으로 환산
+  const jpy = await call('/api/exchange-rate?currency=JPY');
+  assert.equal(jpy.status, 200);
+  assert.equal(jpy.data.rate, 8.4335, '1 JPY = 8.4335원');
+  assert.equal(jpy.data.unitRate, 843.35, '네이버 고시(100엔) 값도 함께');
+  assert.equal(jpy.data.baseUnit, 100);
+
+  // 지원하지 않는 통화는 400
+  const bad = await call('/api/exchange-rate?currency=ABC');
+  assert.equal(bad.status, 400);
+  assert.match(bad.data.error, /지원하지 않는 통화/);
+  assert.equal((await call('/api/exchange-rate')).status, 400, '통화 없이 호출하면 400');
+
+  // 네이버 조회 실패는 502 + 친절한 안내
+  const down = await call('/api/exchange-rate?currency=USD');
+  assert.equal(down.status, 502);
+  assert.equal(down.data.ok, false);
+  assert.match(down.data.error, /네이버에서 환율을 불러오지 못했어요/);
+
+  assert.deepEqual(rateCalls.slice(-4), ['EUR', 'JPY', 'USD'], `조회한 통화: ${rateCalls.join(',')}`);
 });
 
 test('기본 시드: 스페인 여행 · 두 가족이 준비되어 있다', async () => {
