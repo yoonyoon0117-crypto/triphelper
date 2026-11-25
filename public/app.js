@@ -328,9 +328,10 @@
       </section>`;
 
     const expenses = t.expenses;
+    const expenseTitle = `<div class="section-title"><h3>지출 내역</h3><span class="hint">${expenses.length}건</span></div>`;
     let expenseSection;
     if (!expenses.length) {
-      expenseSection = `
+      expenseSection = expenseTitle + `
         <section class="card empty fade-in">
           <div class="emo">🧾</div>
           <div class="t">아직 지출이 없어요</div>
@@ -369,10 +370,11 @@
             </button>`;
           }).join('')}
         </section>`).join('');
-      expenseSection = `<div class="section-title"><h3>지출 내역</h3><span class="hint">${expenses.length}건</span></div>${blocks}`;
+      expenseSection = expenseTitle + blocks;
     }
 
-    return summary + hero + addBtn + peopleCard + expenseSection;
+    // 순서: 정산할 금액 → ＋ 지출 추가하기 → 지출 내역 → 참여자별 정산(맨 아래)
+    return summary + hero + addBtn + expenseSection + peopleCard;
   }
 
   function modeLabel(split) {

@@ -123,12 +123,30 @@ async function run() {
 
   await page.waitForFunction(() => document.querySelector('#tripName').textContent.includes('스페인'));
   const heroText = await page.textContent('.hero');
-  assert.match(heroText, /정산할 금액/);
-  assert.match(heroText, /A가족/);
-  assert.match(heroText, /B가족/);
+  assert.match(heroText, /정산 상태/, '지출이 없으면 정산 상태로 보인다');
+  assert.match(heroText, /딱 맞았어요/);
+  assert.match(heroText, /첫 지출을 기록해 보세요/);
   assert.match(heroText, /총 지출/);
-  assert.match(heroText, /1인당 평균/);
-  assert.match(heroText, /송금/);
+  assert.match(heroText, /0건/, '기본 시드 지출은 0건');
+  const emptyView = await page.textContent('#view');
+  assert.match(emptyView, /지출 내역/);
+  assert.match(emptyView, /아직 지출이 없어요/);
+
+  // 정산 탭 카드 순서: 정산할 금액 → ＋ 지출 추가하기 → 지출 내역 → 참여자별 정산(맨 아래)
+  const cardOrder = await page.evaluate(() => {
+    const nodes = [...document.querySelector('#view').children];
+    const find = (fn) => nodes.findIndex(fn);
+    return {
+      hero: find((n) => n.classList.contains('hero')),
+      add: find((n) => n.id === 'btnAdd'),
+      expenses: find((n) => n.classList.contains('section-title') && n.textContent.includes('지출 내역')),
+      people: find((n) => n.classList.contains('card') && n.textContent.includes('참여자별 정산')),
+    };
+  });
+  assert.ok(cardOrder.hero >= 0, '정산할 금액 카드');
+  assert.ok(cardOrder.add > cardOrder.hero, '지출 추가하기 버튼은 정산할 금액 아래');
+  assert.ok(cardOrder.expenses > cardOrder.add, '지출 내역은 지출 추가하기 아래');
+  assert.ok(cardOrder.people > cardOrder.expenses, '참여자별 정산은 지출 내역 아래(맨 끝)');
   const summaryText = await page.textContent('.trip-summary');
   assert.match(summaryText, /12\.19 – 12\.26/, '여행 요약 바 날짜');
   assert.match(summaryText, /1 EUR = 1,500원/, '여행 요약 바 환율');
@@ -162,7 +180,8 @@ async function run() {
   await page.fill('#exTitle', '저녁 식사');
   await page.fill('#exAmount', '120');
   await page.fill('#exDate', '2026-12-20');
-  await page.click('#exPayers .chip >> nth=1'); // B가족 결제
+  await page.click('#exPayers .chip >> nth=0'); // A가족 결제
+  await page.click('.radio[data-mode="headcount"]'); // 인원 비례 — 인원 변경 재계산 확인용
   await page.waitForTimeout(200);
   await shot(page, '02-expense-form.png');
   await page.click('[data-act="save-expense"]');
@@ -170,8 +189,8 @@ async function run() {
   await page.waitForTimeout(500);
 
   const afterExpense = (await api(`/api/trips/${tripBefore.id}`)).data;
-  const expectedTotal = 180 * 1500 + 45000 + 120 * 1500;
-  assert.equal(afterExpense.settlement.totalKrw, expectedTotal, '총 지출 = 315,000 + 180,000');
+  const expectedTotal = 120 * 1500;
+  assert.equal(afterExpense.settlement.totalKrw, expectedTotal, '지출 1건 = 180,000원');
   const viewText = await page.textContent('#view');
   assert.match(viewText, /저녁 식사/);
   assert.match(viewText, /180,000/, '원화 환산이 목록에 보인다');

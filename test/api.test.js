@@ -73,7 +73,22 @@ test('기본 시드: 스페인 여행 · 두 가족이 준비되어 있다', asy
   assert.equal(full.data.participants.length, 2);
   assert.equal(full.data.participants[0].type, 'group');
   assert.equal(full.data.itinerary.length, 2);
-  assert.equal(full.data.settlement.transfers.length, 1, '예시 지출로 두 가족 정산이 계산된다');
+  assert.deepEqual(full.data.expenses, [], '기본 시드에는 예시 지출이 없다');
+  assert.equal(full.data.settlement.totalKrw, 0);
+  assert.equal(full.data.settlement.transfers.length, 0, '지출이 없으면 송금도 없다');
+
+  // 지출을 직접 넣으면 두 가족 정산이 계산된다
+  const [a] = full.data.participants;
+  const added = await call(`/api/trips/${seeded.id}/expenses`, {
+    method: 'POST',
+    body: { title: '숙소', amount: 180, currency: 'local', payerId: a.id, date: '2026-12-19', split: { mode: 'even' } },
+  });
+  assert.equal(added.status, 201);
+  assert.equal(added.data.settlement.totalKrw, 270000);
+  assert.equal(added.data.settlement.transfers.length, 1, '지출을 넣으면 두 가족 정산이 계산된다');
+  const removed = await call(`/api/trips/${seeded.id}/expenses/${added.data.expenses[0].id}`, { method: 'DELETE' });
+  assert.equal(removed.status, 200);
+  assert.equal(removed.data.expenses.length, 0, '검증 후 시드는 지출 0건으로 되돌린다');
 });
 
 test('공유 코드로 여행 조회 + /t/:code 페이지', async () => {

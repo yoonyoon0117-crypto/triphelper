@@ -74,7 +74,7 @@ try {
   let trip = await call(`/api/trips/${spain.id}`);
   const [A, B] = trip.participants;
 
-  // 예시 지출 2건은 지우고 자연스러운 예시로 다시 채웁니다.
+  // 화면용으로 지출을 자연스러운 예시로 채웁니다(임시 데이터 폴더라 실제 사용자 데이터는 건드리지 않음).
   for (const e of trip.expenses) await call(`/api/trips/${trip.id}/expenses/${e.id}`, { method: 'DELETE' });
   const expenses = [
     { title: '숙소 3박 (마드리드)', amount: 520, currency: 'local', payerId: A.id, date: '2026-12-19', memo: '예약번호 ESP-2311', split: { mode: 'even' } },
